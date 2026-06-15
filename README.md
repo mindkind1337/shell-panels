@@ -112,3 +112,14 @@ A window titled **Shell Panels** opens with one PowerShell pane.
 - **No native compiler needed.** node-pty ships a prebuilt N-API binary that
   loads under both Node and Electron, so no Visual Studio build tools are
   required to install.
+- **Vite 8 with `legacy-peer-deps`.** The build runs Vite 8 deliberately: Vite 8
+  dropped its direct `esbuild` dependency, which clears the esbuild dev-server
+  advisories that Vite ≤7 still carries. `electron-vite` 5, however, caps its
+  Vite peer range at `^7` (no release declares Vite 8 support yet), and npm 10
+  treats that as a hard `ERESOLVE` error — so `.npmrc` sets
+  `legacy-peer-deps=true` to let `npm install` resolve it. The combination is
+  verified to work (build, the full test suite, and the app booting under
+  Electron 42 all pass). Remove that flag once `electron-vite` ships Vite 8
+  support. If a fresh `npm install` ever leaves the app failing to launch with
+  `Error: Electron uninstall`, Electron's binary download was skipped — run
+  `node node_modules/electron/install.js` to fetch it.
