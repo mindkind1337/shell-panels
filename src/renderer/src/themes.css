@@ -291,7 +291,7 @@
    member status that remains distinct from the team identity color. */
 :root[data-theme='warp'] .ws-sidebar:has(.ws-teams) .ws-list {
   flex: 0 1 auto;
-  max-height: 34%;
+  max-height: 55%;
 }
 
 :root[data-theme='warp'] .ws-teams {
@@ -348,29 +348,44 @@
   font-weight: 500;
 }
 
-:root[data-theme='warp'] .ws-team-actions {
-  gap: 1px;
-  opacity: 0.5;
+:root[data-theme='warp'] .ws-team-bar {
+  gap: 3px;
+  padding: 4px 5px 2px 11px;
 }
 
-:root[data-theme='warp'] .ws-team:hover .ws-team-actions,
-:root[data-theme='warp'] .ws-team:focus-within .ws-team-actions {
-  opacity: 1;
-}
-
-:root[data-theme='warp'] .ws-team-actions .ws-icon-btn {
-  width: 20px;
+:root[data-theme='warp'] .ws-team-btn {
   height: 20px;
-  min-height: 20px;
+  padding: 0 6px;
+  border-color: color-mix(in srgb, var(--team) 30%, var(--border));
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--team) 4%, var(--chrome));
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
 }
 
-:root[data-theme='warp'] .ws-team-actions .ws-icon-btn:hover {
-  background: var(--surface-3);
+:root[data-theme='warp'] .ws-team-btn:first-child {
+  border-color: color-mix(in srgb, var(--team) 45%, var(--border));
+  background: color-mix(in srgb, var(--team) 12%, var(--chrome));
   color: var(--text-strong);
 }
 
-:root[data-theme='warp'] .ws-team-actions .ws-icon-btn.danger:hover {
-  background: color-mix(in srgb, var(--danger) 16%, transparent);
+:root[data-theme='warp'] .ws-team-btn:hover,
+:root[data-theme='warp'] .ws-team-btn.on {
+  border-color: color-mix(in srgb, var(--team) 70%, var(--border));
+  background: color-mix(in srgb, var(--team) 18%, var(--chrome));
+  color: var(--text-strong);
+}
+
+:root[data-theme='warp'] .ws-team-btn:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 1px;
+}
+
+:root[data-theme='warp'] .ws-team-btn.danger:hover {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
+  background: color-mix(in srgb, var(--danger) 14%, var(--chrome));
   color: var(--danger);
 }
 
@@ -502,10 +517,6 @@
 
   :root[data-theme='warp'] .ws-team {
     margin-inline: 1px;
-  }
-
-  :root[data-theme='warp'] .ws-team-actions .ws-icon-btn {
-    width: 18px;
   }
 
   :root[data-theme='warp'] .ws-team-member {
