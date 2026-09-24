@@ -15,11 +15,18 @@ const props = defineProps({
   // (Warp theme): [{ id, num, title, kind, agentId, shellId, accent, state,
   // active }], where
   // state is 'working' | 'waiting' | 'ready'.
-  sessions: { type: Array, default: null }
+  sessions: { type: Array, default: null },
+  // Teams of agents: [{ id, name, color, members: [{ id, num, title, kind,
+  // agentId, shellId, accent, where, here, state }] }]
+  teams: { type: Array, default: () => [] }
 })
 
 const emit = defineEmits([
   'focus-pane',
+  'new-team',
+  'rename-team',
+  'gather-team',
+  'disband-team',
   'folder',
   'select',
   'create',
@@ -132,10 +139,39 @@ const SESSION_STATE = {
   ready: 'Ready'
 }
 
+// --- Teams: rename in place ---------------------------------------------------
+const editingTeamId = ref(null)
+const teamDraft = ref('')
+const teamInputEls = {}
+
+function startTeamRename(team) {
+  editingTeamId.value = team.id
+  teamDraft.value = team.name
+  nextTick(() => {
+    const el = teamInputEls[team.id]
+    if (el) el.select()
+  })
+}
+
+function commitTeamRename() {
+  if (!editingTeamId.value) return
+  const name = teamDraft.value.trim()
+  if (name) emit('rename-team', editingTeamId.value, name)
+  editingTeamId.value = null
+}
+
+function cancelTeamRename() {
+  editingTeamId.value = null
+}
+
 defineExpose({
   startRename: (id) => {
     const item = props.items.find((i) => i.id === id)
     if (item) startRename(item)
+  },
+  startTeamRename: (id) => {
+    const team = props.teams.find((t) => t.id === id)
+    if (team) startTeamRename(team)
   }
 })
 </script>
@@ -286,6 +322,91 @@ defineExpose({
       </svg>
       <span v-if="!collapsed">New workspace</span>
     </button>
+
+    <div v-if="teams.length && !collapsed" class="ws-teams" aria-label="Teams">
+      <div class="ws-head">
+        <span class="ws-head-title">Teams</span>
+        <button
+          class="ws-icon-btn"
+          title="New team with the active pane"
+          @click="emit('new-team')"
+        >
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+          </svg>
+        </button>
+      </div>
+      <div v-for="t in teams" :key="t.id" class="ws-team" :style="{ '--team': t.color }">
+        <div class="ws-team-head">
+          <span class="team-dot"></span>
+          <input
+            v-if="editingTeamId === t.id"
+            :ref="(el) => (teamInputEls[t.id] = el)"
+            v-model="teamDraft"
+            class="ws-input"
+            maxlength="40"
+            @blur="commitTeamRename"
+            @keydown.enter.prevent.stop="commitTeamRename"
+            @keydown.escape.prevent.stop="cancelTeamRename"
+          />
+          <span
+            v-else
+            class="ws-team-name"
+            title="Double-click to rename"
+            @dblclick="startTeamRename(t)"
+            >{{ t.name }}</span
+          >
+          <span class="ws-team-actions">
+            <button class="ws-icon-btn small" title="Rename" @click="startTeamRename(t)">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path
+                  d="M10.5 2.5l3 3L6 13H3v-3l7.5-7.5z"
+                  stroke="currentColor"
+                  stroke-width="1.4"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+            <button
+              class="ws-icon-btn small"
+              title="Gather: side by side in a workspace named after the team"
+              @click="emit('gather-team', t.id)"
+            >
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <rect x="2" y="3" width="5" height="10" rx="1.2" stroke="currentColor" stroke-width="1.4" />
+                <rect x="9" y="3" width="5" height="10" rx="1.2" stroke="currentColor" stroke-width="1.4" />
+              </svg>
+            </button>
+            <button
+              class="ws-icon-btn small danger"
+              title="Disband: the team goes away, its panes stay where they are"
+              @click="emit('disband-team', t.id)"
+            >
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+              </svg>
+            </button>
+          </span>
+        </div>
+        <button
+          v-for="m in t.members"
+          :key="m.id"
+          class="ws-team-member"
+          :class="m.state"
+          :title="`Go to pane ${m.num || ''} in ${m.where}`"
+          @click="emit('focus-pane', m.id)"
+        >
+          <BrandIcon
+            :kind="m.kind === 'agent' ? m.agentId : m.shellId"
+            :accent="m.kind === 'agent' ? m.accent : null"
+            :label="m.kind === 'agent' ? m.title : null"
+            :size="13"
+          />
+          <span class="ws-team-member-name">{{ m.title }}</span>
+          <span class="ws-team-member-where">{{ m.here ? SESSION_STATE[m.state] : m.where }}</span>
+        </button>
+      </div>
+    </div>
 
     <div v-if="sessions && !collapsed" class="ws-sessions" aria-label="Sessions">
       <div class="ws-head">

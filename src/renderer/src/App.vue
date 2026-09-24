@@ -840,6 +840,7 @@ provide('panelCtx', {
   leaveTeam,
   gatherTeam,
   disbandTeam,
+  startTeamRename,
   copied: (what) => showToast(`${what} copied.`, { timeout: 2000 })
 })
 
@@ -946,6 +947,7 @@ function buildCommands() {
     add('Team', `Gather ${t.name}`, () => gatherTeam(t.id), {
       hint: `Side by side in their own workspace (${n} ${n === 1 ? 'pane' : 'panes'})`
     })
+    add('Team', `Rename ${t.name}`, () => startTeamRename(t.id))
     add('Team', `Disband ${t.name}`, () => disbandTeam(t.id), { hint: 'Panes stay where they are' })
   }
 
@@ -1945,6 +1947,20 @@ function leaveTeam(leafId) {
   pruneTeams()
 }
 
+function renameTeam(teamId, name) {
+  const team = teamById(teamId)
+  const clean = String(name || '')
+    .trim()
+    .slice(0, 40)
+  if (team && clean) team.name = clean
+}
+
+// Open the sidebar and put a team's name into edit mode.
+function startTeamRename(teamId) {
+  if (sidebarCollapsed.value) toggleSidebar()
+  nextTick(() => sidebarEl.value && sidebarEl.value.startTeamRename(teamId))
+}
+
 // "Dissocier": the team goes away, its panes stay where they are.
 function disbandTeam(teamId) {
   const team = teamById(teamId)
@@ -1988,16 +2004,44 @@ function gatherTeam(teamId) {
   refitSoon()
 }
 
+// A pane's agent state for the sidebar: 'working' | 'waiting' | 'ready'.
+function paneState(leaf) {
+  if (leaf.kind !== 'agent') return 'ready'
+  if (attention[leaf.id]) return 'waiting'
+  return agentStatus[leaf.id] === 'busy' ? 'working' : 'ready'
+}
+
+// Every team with its members and where they are, for the sidebar.
+const teamItems = computed(() =>
+  teams.value.map((t) => ({
+    id: t.id,
+    name: t.name,
+    color: t.color,
+    members: teamMembers(t.id).map((leaf) => {
+      const ws = wsOfLeaf(leaf.id)
+      return {
+        id: leaf.id,
+        num: leaf.num || 0,
+        title: leaf.title || leaf.shellName || 'Terminal',
+        kind: leaf.kind || 'shell',
+        agentId: leaf.agentId || null,
+        shellId: leaf.shellId || null,
+        accent: leaf.accent || null,
+        where: ws ? ws.name : '',
+        here: !!ws && ws.id === currentWsId.value,
+        state: paneState(leaf)
+      }
+    })
+  }))
+)
+
 // Panes of the current workspace with their agent state, for the sidebar's
 // session list. Only the Warp theme shows it.
 const sessionItems = computed(() => {
   if (settings.theme !== 'warp') return null
   const items = []
   forEachLeaf(tree.value, (leaf) => {
-    const isAgent = leaf.kind === 'agent'
-    let state = 'ready'
-    if (isAgent && attention[leaf.id]) state = 'waiting'
-    else if (isAgent && agentStatus[leaf.id] === 'busy') state = 'working'
+    const state = paneState(leaf)
     items.push({
       id: leaf.id,
       num: leaf.num || 0,
@@ -2608,7 +2652,12 @@ onBeforeUnmount(() => {
         :collapsed="sidebarCollapsed"
         :width="sidebarWidth"
         :sessions="sessionItems"
+        :teams="teamItems"
         @focus-pane="focusPane"
+        @new-team="activeId && newTeam([activeId])"
+        @rename-team="renameTeam"
+        @gather-team="gatherTeam"
+        @disband-team="disbandTeam"
         @select="selectWorkspace"
         @create="createWorkspace"
         @rename="renameWorkspace"

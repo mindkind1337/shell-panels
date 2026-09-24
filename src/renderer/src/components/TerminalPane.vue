@@ -82,6 +82,7 @@ function menuTeam(action, teamId) {
   else if (action === 'leave') ctx.leaveTeam(id)
   else if (action === 'gather') ctx.gatherTeam(teamId)
   else if (action === 'disband') ctx.disbandTeam(teamId)
+  else if (action === 'rename') ctx.startTeamRename(teamId)
 }
 
 function acknowledge() {
@@ -911,7 +912,7 @@ onBeforeUnmount(() => {
         <span
           v-if="team"
           class="pane-team"
-          :title="`Team: ${team.name}. Use the ⋯ menu to gather or disband it.`"
+          :title="`Team: ${team.name}. Manage it under Teams in the sidebar or in the ⋯ menu.`"
           >{{ team.name }}</span
         >
         <span v-if="isAgent && agentStatus === 'busy'" class="pane-working">working</span>
@@ -1267,6 +1268,7 @@ onBeforeUnmount(() => {
         <button class="ctx-menu-item" @click="menuTeam('gather', team.id)">
           Gather the team<span class="ctx-menu-shortcut">side by side</span>
         </button>
+        <button class="ctx-menu-item" @click="menuTeam('rename', team.id)">Rename the team…</button>
         <button class="ctx-menu-item" @click="menuTeam('leave')">Leave the team</button>
         <button class="ctx-menu-item" @click="menuTeam('disband', team.id)">
           Disband the team<span class="ctx-menu-shortcut">panes stay</span>
