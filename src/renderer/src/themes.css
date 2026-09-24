@@ -235,3 +235,59 @@
 :root[data-theme='warp'] .statusbar > :last-child {
   margin-left: auto;
 }
+
+/* Team identity stays separate from the sage focus marker and agent alerts.
+   --team is supplied by the team model on the pane or badge itself. */
+:root[data-theme='warp'] .pane.in-team .pane-nav {
+  background: color-mix(in srgb, var(--team, var(--ui-accent)) 7%, var(--surface));
+  box-shadow: inset 2px 0 0 var(--team, var(--ui-accent));
+}
+
+:root[data-theme='warp'] .pane-team,
+:root[data-theme='warp'] .ws-session-team {
+  display: inline-block;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--team, var(--ui-accent)) 35%, var(--border));
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--team, var(--ui-accent)) 10%, var(--surface));
+  color: var(--text-strong);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 16px;
+  vertical-align: middle;
+}
+
+:root[data-theme='warp'] .pane-team {
+  max-width: clamp(48px, 9vw, 120px);
+}
+
+:root[data-theme='warp'] .ws-session-team {
+  align-self: flex-start;
+  max-width: 100%;
+  margin-top: 2px;
+  font-size: 10px;
+  line-height: 14px;
+}
+
+:root[data-theme='warp'] .team-dot {
+  display: inline-block;
+  flex: 0 0 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--team, var(--ui-accent));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text-strong) 25%, transparent);
+  vertical-align: middle;
+}
+
+/* If a badge contains the shared dot, keep it legible beside the team name. */
+:root[data-theme='warp'] .pane-team .team-dot,
+:root[data-theme='warp'] .ws-session-team .team-dot {
+  margin-right: 4px;
+}
