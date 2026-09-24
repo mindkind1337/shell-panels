@@ -26,6 +26,7 @@ import {
 import { detectApproval } from './agentLimit'
 import { activity, recordActivity, loadActivity, saveActivityNow } from './activityStore'
 import ActivityPanel from './components/ActivityPanel.vue'
+import ConfirmDialog from './components/ConfirmDialog.vue'
 import { dropBuffer, seedBuffer } from './ptyStore'
 import { tasks as boardTasks, setTasks, updateTask, removeTask } from './taskBoardStore'
 
@@ -129,6 +130,22 @@ function runToastAction(t) {
   if (t.action) t.action.run()
 }
 const sidebarEl = ref(null)
+
+// Confirmations in Tessel's own look (window.confirm ignores the theme).
+// askConfirm({ title, text, confirmLabel, danger }) resolves to true / false.
+const confirmState = ref(null)
+function askConfirm(opts) {
+  return new Promise((resolve) => {
+    if (confirmState.value) confirmState.value.resolve(false)
+    confirmState.value = { ...opts, resolve }
+  })
+}
+function answerConfirm(ok) {
+  const c = confirmState.value
+  confirmState.value = null
+  if (c) c.resolve(!!ok)
+}
+provide('askConfirm', askConfirm)
 const currentWs = computed(() => workspaces.value.find((w) => w.id === currentWsId.value) || null)
 
 // Teams: named, coloured groups of agents inside a workspace. Each member pane
@@ -594,11 +611,13 @@ function closeLeaf(leafId, opts = {}) {
     forEachLeaf(ws.tree, (l) => {
       if (l.id === leafId) leaf = l
     })
-    if (
-      leaf &&
-      leaf.kind === 'agent' &&
-      !window.confirm(`Close ${leaf.title}? The agent session will end.`)
-    ) {
+    if (leaf && leaf.kind === 'agent') {
+      askConfirm({
+        title: `Close ${leaf.title}?`,
+        text: 'The agent session will end. Its conversation can be resumed later from Agent sessions.',
+        confirmLabel: 'Close',
+        danger: true
+      }).then((ok) => ok && closeLeaf(leafId, { ...opts, force: true }))
       return
     }
   }
@@ -1780,7 +1799,7 @@ function renameWorkspace(id, name) {
   if (ws) ws.name = name
 }
 
-function removeWorkspace(id) {
+function removeWorkspace(id, confirmed = false) {
   const idx = workspaces.value.findIndex((w) => w.id === id)
   if (idx < 0) return
   const ws = workspaces.value[idx]
@@ -1792,11 +1811,15 @@ function removeWorkspace(id) {
   if (wsTasks.length)
     lost.push(`its ${wsTasks.length} ${wsTasks.length === 1 ? 'task' : 'tasks'} deleted`)
   const what = lost.join(' and ')
-  if (
-    lost.length &&
-    !window.confirm(`Delete "${ws.name}"? ${what[0]?.toUpperCase()}${what.slice(1)}.`)
-  )
+  if (lost.length && !confirmed) {
+    askConfirm({
+      title: `Delete "${ws.name}"?`,
+      text: `${what[0]?.toUpperCase()}${what.slice(1)}.`,
+      confirmLabel: 'Delete',
+      danger: true
+    }).then((ok) => ok && removeWorkspace(id, true))
     return
+  }
   for (const t of wsTasks) removeTask(t.id)
   forEachLeaf(ws.tree, (leaf) => {
     window.shellApi.killPty(leaf.id)
@@ -2237,20 +2260,42 @@ function leaveTeam(leafId) {
   if (teamById(teamId)) tellTeam(teamId, `${leaf.title} left the team.`)
 }
 
-// "Ungroup": the team goes away, its panes stay where they are.
+// "Ungroup": the team goes away at once, its panes stay where they are. For a
+// few seconds a toast offers Undo; only then are the agents told and the
+// change logged, so an Undo leaves no trace.
+const UNGROUP_UNDO_MS = 8000
 function disbandTeam(teamId) {
   const team = teamById(teamId)
+  if (!team) return
   const members = teamMembers(teamId)
   const wsId = teamWsId(teamId)
-  for (const leaf of members) {
-    leaf.team = null
-    logMembership(leaf, null)
-  }
+  for (const leaf of members) leaf.team = null
   teams.value = teams.value.filter((t) => t.id !== teamId)
-  if (team) {
-    tellAgents(members, `[Tessel] Team "${team.name}" was ungrouped: you now work on your own.`, teamId)
+  let undone = false
+  const commit = setTimeout(() => {
+    if (undone) return
+    const still = members.filter((l) => findLeaf(l.id))
+    for (const leaf of still) logMembership(leaf, null)
+    tellAgents(still, `[Tessel] Team "${team.name}" was ungrouped: you now work on your own.`, teamId)
     recordActivity({ type: 'team', action: 'ungrouped', teamId, wsId, name: team.name })
-  }
+  }, UNGROUP_UNDO_MS)
+  showToast(`${team.name} ungrouped. Its sessions stay where they are.`, {
+    timeout: UNGROUP_UNDO_MS,
+    action: {
+      label: 'Undo',
+      run: () => {
+        undone = true
+        clearTimeout(commit)
+        if (!teams.value.some((t) => t.id === team.id)) teams.value.push(team)
+        // Members still open and not moved to another team meanwhile come back.
+        for (const m of members) {
+          const leaf = findLeaf(m.id)
+          if (leaf && !leaf.team) leaf.team = team.id
+        }
+        pruneTeams()
+      }
+    }
+  })
 }
 
 // Tell a team's agents what changed. With { welcome: true }, each member
@@ -3268,6 +3313,15 @@ onBeforeUnmount(() => {
     />
 
     <CommandPalette v-if="paletteOpen" :commands="paletteCommands" @close="paletteOpen = false" />
+
+    <ConfirmDialog
+      v-if="confirmState"
+      :title="confirmState.title"
+      :text="confirmState.text || ''"
+      :confirm-label="confirmState.confirmLabel || 'OK'"
+      :danger="!!confirmState.danger"
+      @answer="answerConfirm"
+    />
 
     <ActivityPanel
       v-if="activityOpen"
