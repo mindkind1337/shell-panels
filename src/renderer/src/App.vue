@@ -721,6 +721,9 @@ function scheduleTaskSave() {
 // The main process downloads new versions in the background (updater.js); the
 // toolbar shows a button once one is ready, and installing restarts the app
 // with every pane reopened where it was.
+// The dev build marks itself in the toolbar (yellow logo + "(dev)"), so it
+// can't be mistaken for the installed app when both are around.
+const isDev = !!window.shellApi.isDev
 const updateStatus = ref({ state: 'disabled' })
 const updateOpen = ref(false)
 const updateInstalling = ref(false)
@@ -1963,7 +1966,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="app">
     <div class="toolbar">
-      <div class="brand">
+      <div class="brand" :class="{ dev: isDev }">
         <svg
           class="brand-logo"
           width="18"
@@ -1991,6 +1994,7 @@ onBeforeUnmount(() => {
           />
         </svg>
         <span class="brand-name">Tessel</span>
+        <span v-if="isDev" class="brand-dev" title="Development build (npm run dev)">(dev)</span>
       </div>
 
       <div class="split-btn launch-trigger" @pointerdown.stop>

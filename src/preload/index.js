@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 // Bridge a minimal, typed-ish API to the renderer. No node access leaks.
 const api = {
+  // True in the dev build (not the installed app); the toolbar shows it.
+  isDev: process.argv.includes('--tessel-dev'),
   listShells: () => ipcRenderer.invoke('shells:list'),
   listAgents: (custom) => ipcRenderer.invoke('agents:list', custom),
   refreshAgents: (custom) => ipcRenderer.invoke('agents:refresh', custom),

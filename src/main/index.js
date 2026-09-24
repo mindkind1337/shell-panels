@@ -78,7 +78,11 @@ migrateOldUserData()
 
 let mainWindow = null
 
+// The dev build uses a yellow copy of the icon (window, taskbar, Start menu
+// shortcut), so it can't be mistaken for the installed app.
 function appIconPath() {
+  const devIco = join(__dirname, '../../build/icon-dev.ico')
+  if (!app.isPackaged && fs.existsSync(devIco)) return devIco
   const ico = join(__dirname, '../../build/icon.ico')
   return fs.existsSync(ico) ? ico : join(__dirname, '../../build/icon.png')
 }
@@ -89,7 +93,7 @@ function appIconPath() {
 // button and notifications line up.
 const APP_ID = app.isPackaged
   ? 'com.jeanclaudetrottier.tessel'
-  : 'com.jeanclaudetrottier.tessel.dev'
+  : 'com.jeanclaudetrottier.tessel.devyellow'
 if (process.platform === 'win32') app.setAppUserModelId(APP_ID)
 
 // Logs: %APPDATA%\\tessel\\logs\\tessel.log (rotated, 1 MB x 4).
@@ -996,6 +1000,8 @@ function createWindow() {
     },
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
+      // Lets the window mark itself as the dev build.
+      additionalArguments: app.isPackaged ? [] : ['--tessel-dev'],
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false

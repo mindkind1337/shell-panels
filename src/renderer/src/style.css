@@ -143,6 +143,18 @@ button {
   letter-spacing: 0.01em;
 }
 
+/* Dev build: yellow logo and a "(dev)" tag. */
+.brand.dev {
+  color: #facc15;
+}
+
+.brand-dev {
+  margin-left: -4px;
+  color: #facc15;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .toolbar-sep {
   width: 1px;
   height: 18px;
