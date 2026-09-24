@@ -934,8 +934,11 @@ function buildCommands() {
     add('Workspace', 'Message every agent in this workspace', () => startWsMessage(wsId), {
       hint: 'One message, sent to each agent (never to plain shells)'
     })
-    add('Workspace', 'Project notes', () => shareProjectNotes(wsId), {
-      hint: 'A shared notes file for the agents of this workspace'
+    add('Workspace', 'Open project notes', () => openProjectNotes(wsId), {
+      hint: 'The notes file the agents of this workspace share'
+    })
+    add('Workspace', 'Share project notes with the agents', () => shareProjectNotes(wsId), {
+      hint: 'Tell each agent where the notes are'
     })
   }
 
@@ -2008,8 +2011,18 @@ function createTeam(leafIds) {
   const color = TEAM_COLORS.find((c) => !used.has(c)) || TEAM_COLORS[n % TEAM_COLORS.length]
   const team = { id: newId('team'), name: `Team ${n}`, color }
   teams.value.push(team)
-  for (const id of ids) findLeaf(id).team = team.id
+  // Agents taken from another team: that team hears they left.
+  const leftFrom = new Map()
+  for (const id of ids) {
+    const leaf = findLeaf(id)
+    if (leaf.team) leftFrom.set(leaf.team, [...(leftFrom.get(leaf.team) || []), leaf.title])
+    leaf.team = team.id
+  }
   pruneTeams()
+  for (const [oldId, names] of leftFrom) {
+    if (teamById(oldId)) tellTeam(oldId, `${names.join(', ')} left the team.`)
+  }
+  tellTeam(team.id, null, { welcome: true })
   return team
 }
 
@@ -2018,20 +2031,74 @@ function renameTeam(teamId, name) {
   const clean = String(name || '')
     .trim()
     .slice(0, 40)
-  if (team && clean) team.name = clean
+  if (!team || !clean || clean === team.name) return
+  const old = team.name
+  team.name = clean
+  tellTeam(teamId, `The team "${old}" is now called "${clean}".`)
 }
 
 function leaveTeam(leafId) {
   const leaf = findLeaf(leafId)
   if (!leaf || !leaf.team) return
+  const teamId = leaf.team
+  const name = teamById(teamId)?.name || 'the team'
   leaf.team = null
   pruneTeams()
+  tellAgents([leaf], `[Tessel] You are no longer in team "${name}".`)
+  if (teamById(teamId)) tellTeam(teamId, `${leaf.title} left the team.`)
 }
 
 // "Ungroup": the team goes away, its panes stay where they are.
 function disbandTeam(teamId) {
-  for (const leaf of teamMembers(teamId)) leaf.team = null
+  const team = teamById(teamId)
+  const members = teamMembers(teamId)
+  for (const leaf of members) leaf.team = null
   teams.value = teams.value.filter((t) => t.id !== teamId)
+  if (team) tellAgents(members, `[Tessel] Team "${team.name}" was ungrouped: you now work on your own.`)
+}
+
+// Tell a team's agents what changed. With { welcome: true }, each member
+// hears who its teammates are and where the shared notes are (created once in
+// the project folder; see shareProjectNotes).
+async function tellTeam(teamId, text, opts = {}) {
+  const team = teamById(teamId)
+  if (!team) return
+  const members = teamMembers(teamId).filter((l) => l.kind === 'agent')
+  if (!members.length) return
+  if (!opts.welcome) {
+    tellAgents(members, `[Tessel] Team "${team.name}": ${text}`)
+    return
+  }
+  const ws = wsOfLeaf(members[0].id)
+  const dir = (ws && ws.cwd) || members[0].startDir
+  let notes = ''
+  if (dir && window.shellApi.projectNotes) {
+    const res = await window.shellApi.projectNotes({ dir, content: projectNotesTemplate(ws) })
+    if (res && res.ok) notes = res.path
+  }
+  for (const leaf of members) {
+    const mates = members.filter((l) => l.id !== leaf.id).map(agentLabel)
+    tellAgents(
+      [leaf],
+      `[Tessel] You are now in team "${team.name}"` +
+        (mates.length ? ` with ${mates.join(', ')}.` : ' (no other agent yet).') +
+        (notes
+          ? ` Shared notes: ${notes} . Read them, agree there on who does what, and add a dated line to their Journal for each notable change.`
+          : '') +
+        ' Before editing a file a teammate may be editing, check with them. Do not commit the notes file.'
+    )
+  }
+  const told = members.filter((l) => !limits[l.id]).length
+  showToast(`Told ${told} ${told === 1 ? 'agent' : 'agents'} they are in ${team.name}.`, {
+    timeout: 3000
+  })
+}
+
+// Deliver a note from Tessel to some agents; ones out of usage are skipped.
+function tellAgents(list, text) {
+  for (const leaf of list) {
+    if (leaf.kind === 'agent' && !limits[leaf.id]) deliverToAgent(leaf.id, text)
+  }
 }
 
 function messageTeam(teamId, text) {
@@ -2199,6 +2266,27 @@ async function shareProjectNotes(wsId) {
         : ''),
     { timeout: limited.length ? 8000 : 5000 }
   )
+}
+
+// Open the workspace's notes file for the user (created if missing).
+async function openProjectNotes(wsId) {
+  const ws = workspaces.value.find((w) => w.id === wsId)
+  if (!ws) return
+  const dir = ws.cwd || wsAgents(wsId)[0]?.startDir
+  if (!dir) {
+    showToast(`Set a project folder for "${ws.name}" first.`, { kind: 'error' })
+    return
+  }
+  if (!window.shellApi.openProjectNotes) {
+    showToast('Restart Tessel to open the project notes.', { kind: 'error' })
+    return
+  }
+  const res = await window.shellApi.openProjectNotes({ dir, content: projectNotesTemplate(ws) })
+  if (!res || !res.ok) {
+    showToast(`Could not open the project notes: ${(res && res.error) || 'unknown error'}`, {
+      kind: 'error'
+    })
+  }
 }
 
 // Open the sidebar's message box under a workspace.
@@ -2844,7 +2932,7 @@ onBeforeUnmount(() => {
         @message-team="messageTeam"
         @focus-pane="focusPane"
         @message-ws="messageWorkspace"
-        @notes-ws="shareProjectNotes"
+        @notes-ws="openProjectNotes"
         @select="selectWorkspace"
         @create="createWorkspace"
         @rename="renameWorkspace"
