@@ -244,7 +244,7 @@ function onDrop(e) {
 function isAppShortcut(e) {
   const k = e.key
   if (e.ctrlKey && e.shiftKey && !e.altKey) {
-    return ['e', 'o', 'w', 'b', 'k', 'n', 'f', 'r'].includes(k.toLowerCase())
+    return ['e', 'o', 'w', 'b', 'k', 'n', 'f', 'r', 'p'].includes(k.toLowerCase())
   }
   if (e.ctrlKey && !e.shiftKey && !e.altKey) {
     return ['=', '+', '-', '0', ',', 'PageUp', 'PageDown'].includes(k)

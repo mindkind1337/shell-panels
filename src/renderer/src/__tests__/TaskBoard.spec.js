@@ -54,6 +54,22 @@ describe('TaskBoard.vue', () => {
     expect(card.props('agentPanes')).toEqual(AGENT_PANES)
   })
 
+  it('shows only the tasks of its workspace', () => {
+    addTask({ title: 'Tessel task', wsId: 'ws-a' })
+    addTask({ title: 'BridgeClip task', wsId: 'ws-b' })
+    const wrapper = mount(TaskBoard, { props: { workspaceId: 'ws-a' } })
+    expect(wrapper.findAllComponents(TaskCard)).toHaveLength(1)
+    expect(wrapper.text()).toContain('Tessel task')
+    expect(wrapper.text()).not.toContain('BridgeClip task')
+  })
+
+  it('adds new tasks to its workspace', async () => {
+    const wrapper = mount(TaskBoard, { props: { workspaceId: 'ws-a' } })
+    await wrapper.get('[data-test="new-task-input"]').setValue('For this project')
+    await wrapper.get('[data-test="add-task-form"]').trigger('submit')
+    expect(tasks.find((t) => t.title === 'For this project').wsId).toBe('ws-a')
+  })
+
   it('adds a task through the add-task control', async () => {
     const wrapper = mount(TaskBoard)
     await wrapper.get('[data-test="new-task-input"]').setValue('Fresh task')

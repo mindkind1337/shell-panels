@@ -11,13 +11,16 @@ function newId() {
 }
 
 // Build a fresh task. Starts in the first column, unassigned to any pane.
-export function createTask({ title } = {}) {
+// `wsId` is the workspace whose board it belongs to (each workspace has its
+// own board).
+export function createTask({ title, wsId } = {}) {
   const name = typeof title === 'string' ? title.trim() : ''
   if (!name) throw new Error('createTask requires a non-empty title')
   return {
     id: newId(),
     title: name,
     column: COLUMNS[0],
-    paneId: null
+    paneId: null,
+    wsId: typeof wsId === 'string' && wsId ? wsId : null
   }
 }

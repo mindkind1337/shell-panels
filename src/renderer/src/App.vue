@@ -9,13 +9,14 @@ import SettingsDialog from './components/SettingsDialog.vue'
 import UpdateDialog from './components/UpdateDialog.vue'
 import { settings, loadSettings, DEFAULT_SETTINGS } from './settings'
 import McpDialog from './components/McpDialog.vue'
+import CommandPalette from './components/CommandPalette.vue'
 import ToolsDialog from './components/ToolsDialog.vue'
 import SessionsDialog from './components/SessionsDialog.vue'
 import { getPane } from './paneRegistry'
 import { chainCommands } from './shellChain'
 import { agentStatus, attention, clearAgentStatus, clearAttention } from './agentStatus'
 import { dropBuffer, seedBuffer } from './ptyStore'
-import { tasks as boardTasks, setTasks, updateTask } from './taskBoardStore'
+import { tasks as boardTasks, setTasks, updateTask, removeTask } from './taskBoardStore'
 
 const shells = ref([])
 const agents = ref([])
@@ -134,7 +135,7 @@ const activeId = computed({
   }
 })
 const initError = ref('')
-const gridMenuOpen = ref(false)
+const openMenu = ref(null) // toolbar dropdown: 'layout' | 'agents'
 
 const SHORTCUTS = [
   {
@@ -142,6 +143,7 @@ const SHORTCUTS = [
     rows: [
       ['Ctrl+Shift+T', 'New terminal (default shell)'],
       ['Ctrl+Shift+Space', 'Open a terminal or agent'],
+      ['Ctrl+Shift+P', 'Command palette: find panes, workspaces, commands'],
       ['Ctrl+Shift+E', 'Split right'],
       ['Ctrl+Shift+O', 'Split down'],
       ['Ctrl+Shift+W', 'Close pane'],
@@ -525,6 +527,7 @@ function saveLayoutNow() {
     placement: placement.value,
     settings: { ...settings },
     workspaces: workspaces.value.map((w) => ({
+      id: w.id,
       name: w.name,
       cwd: w.cwd || null,
       tree: serializeNode(w.tree)
@@ -669,9 +672,10 @@ const taskPanelOpen = ref(false)
 // Live list of agent panes, handed to the board so a task can be assigned to
 // one. Walks the same tree the terminals render from, so it recomputes only when
 // the tree structure or a pane title/accent changes.
+// Agent panes a task on the current workspace's board can be assigned to.
 const agentPanes = computed(() => {
   const out = []
-  forEachWsLeaf((leaf) => {
+  forEachLeaf(tree.value, (leaf) => {
     if (leaf.kind === 'agent') {
       out.push({
         id: leaf.id,
@@ -700,7 +704,16 @@ function toggleTaskPanel() {
 function reconcileTaskPanes() {
   const liveIds = new Set()
   forEachWsLeaf((leaf) => liveIds.add(leaf.id))
+  const wsIds = new Set(workspaces.value.map((w) => w.id))
+  const fallback = currentWsId.value || (workspaces.value[0] && workspaces.value[0].id)
   for (const task of boardTasks) {
+    // Each workspace has its own board. Tasks saved before that (or whose
+    // workspace is gone) go to their pane's workspace, else the current one,
+    // so none disappears.
+    if (!task.wsId || !wsIds.has(task.wsId)) {
+      const owner = task.paneId && wsOfLeaf(task.paneId)
+      updateTask(task.id, { wsId: owner ? owner.id : fallback })
+    }
     if (task.paneId && !liveIds.has(task.paneId)) updateTask(task.id, { paneId: null })
   }
 }
@@ -830,8 +843,97 @@ function applyGrid(v) {
   buildGrid(cols, rows)
 }
 
-function toggleGridMenu() {
-  gridMenuOpen.value = !gridMenuOpen.value
+function toggleMenu(name) {
+  launcher.open = false
+  openMenu.value = openMenu.value === name ? null : name
+}
+
+// --- Command palette (Ctrl+Shift+P, or the search box in the toolbar) ------------
+const paletteOpen = ref(false)
+const paletteCommands = ref([])
+
+function openPalette() {
+  closeMenus()
+  paletteCommands.value = buildCommands()
+  paletteOpen.value = true
+}
+
+function togglePalette() {
+  if (paletteOpen.value) paletteOpen.value = false
+  else openPalette()
+}
+
+// Everything the palette can do, built fresh each time it opens.
+function buildCommands() {
+  const cmds = []
+  const add = (group, title, run, extra = {}) =>
+    cmds.push({ id: `${group}:${cmds.length}`, group, title, run, ...extra })
+
+  for (const s of shells.value) {
+    add('New', `New ${s.name}`, () => launch({ kind: 'shell', id: s.id }), {
+      shortcut: s.id === selectedShell.value ? 'Ctrl+Shift+T' : ''
+    })
+  }
+  for (const a of agents.value.filter((x) => x.available)) {
+    add('New', `New ${a.name}`, () => launch({ kind: 'agent', id: a.id }), { hint: 'AI agent' })
+  }
+  add('New', 'New workspace', createWorkspace, { shortcut: 'Ctrl+Shift+N' })
+
+  add('Layout', 'Split right', () => splitActive('row'), { shortcut: 'Ctrl+Shift+E' })
+  add('Layout', 'Split down', () => splitActive('col'), { shortcut: 'Ctrl+Shift+O' })
+  for (const o of gridOptions) add('Layout', `Even grid ${o.label}`, () => applyGrid(o.value))
+  if (activeId.value) {
+    const id = activeId.value
+    add('Layout', 'Maximize or restore the active pane', () => toggleMaximize(id))
+  }
+  add('Layout', 'Close the active pane', closeActive, { shortcut: 'Ctrl+Shift+W' })
+  add('Layout', sidebarCollapsed.value ? 'Show the sidebar' : 'Hide the sidebar', toggleSidebar)
+
+  add('Agents', 'Resume a session', openSessions, {
+    hint: 'Reopen a past Claude or Codex conversation'
+  })
+  add('Agents', 'MCP servers', () => (mcpOpen.value = true), { hint: 'Give agents extra tools' })
+  add('Agents', 'Install tools', openTools, { hint: 'Agents, Git, Node.js and more' })
+  add('Agents', broadcast.value ? 'Turn broadcast off' : 'Turn broadcast on', toggleBroadcast, {
+    shortcut: 'Ctrl+Shift+B'
+  })
+  add(
+    'Agents',
+    taskPanelOpen.value ? 'Hide the task board' : 'Show the task board',
+    toggleTaskPanel,
+    {
+      shortcut: 'Ctrl+Shift+K'
+    }
+  )
+
+  add('Tessel', 'Settings', () => (settingsOpen.value = true), { shortcut: 'Ctrl+,' })
+  add('Tessel', 'Keyboard shortcuts and help', () => (helpOpen.value = true), { shortcut: 'F1' })
+  if (updateStatus.value.state === 'ready') {
+    add('Tessel', `Install update ${updateStatus.value.version}`, () => (updateOpen.value = true))
+  } else {
+    add('Tessel', 'Check for updates', checkForUpdates)
+  }
+  add('Tessel', 'Open the logs folder', openLogs)
+
+  for (const w of workspaces.value) {
+    if (w.id !== currentWsId.value) {
+      add('Go to workspace', w.name, () => selectWorkspace(w.id), { hint: w.cwd || '' })
+    }
+  }
+  for (const w of workspaces.value) {
+    forEachLeaf(w.tree, (leaf) => {
+      add('Go to pane', paneLabel(leaf), () => focusPane(leaf.id), {
+        hint: workspaces.value.length > 1 ? w.name : leaf.shellName || ''
+      })
+    })
+  }
+  return cmds
+}
+
+// Run a toolbar menu command and close the menu.
+function menuAction(fn) {
+  closeMenus()
+  fn()
 }
 
 function agentById(id) {
@@ -1166,6 +1268,7 @@ function sendToPane(fromId, toId, mode, text = '') {
 }
 
 function toggleLauncher(e) {
+  openMenu.value = null
   if (launcher.open) {
     launcher.open = false
     return
@@ -1619,10 +1722,18 @@ function removeWorkspace(id) {
   const ws = workspaces.value[idx]
   let count = 0
   forEachLeaf(ws.tree, () => count++)
-  const noun = count === 1 ? 'pane' : 'panes'
-  if (count && !window.confirm(`Delete "${ws.name}"? Its ${count} ${noun} will be closed.`)) {
+  const wsTasks = boardTasks.filter((t) => t.wsId === id)
+  const lost = []
+  if (count) lost.push(`its ${count} ${count === 1 ? 'pane' : 'panes'} will be closed`)
+  if (wsTasks.length)
+    lost.push(`its ${wsTasks.length} ${wsTasks.length === 1 ? 'task' : 'tasks'} deleted`)
+  const what = lost.join(' and ')
+  if (
+    lost.length &&
+    !window.confirm(`Delete "${ws.name}"? ${what[0]?.toUpperCase()}${what.slice(1)}.`)
+  )
     return
-  }
+  for (const t of wsTasks) removeTask(t.id)
   forEachLeaf(ws.tree, (leaf) => {
     window.shellApi.killPty(leaf.id)
     dropBuffer(leaf.id)
@@ -1723,7 +1834,7 @@ const workspaceItems = computed(() =>
 
 function closeMenus() {
   launcher.open = false
-  gridMenuOpen.value = false
+  openMenu.value = null
 }
 
 function onDocPointerDown(e) {
@@ -1771,6 +1882,9 @@ function onKey(e) {
     } else if (k === 'r') {
       e.preventDefault()
       restartActive()
+    } else if (k === 'p') {
+      e.preventDefault()
+      togglePalette()
     }
   }
   if (e.ctrlKey && !e.shiftKey && !e.altKey) {
@@ -1861,6 +1975,13 @@ async function restoreOrSeedLayout() {
           : []
     for (const snap of snaps) {
       const ws = makeWorkspace(snap.name || nextWorkspaceName())
+      // Keep the saved id: task boards are linked to their workspace by it.
+      if (
+        typeof snap.id === 'string' &&
+        /^ws-[\w-]+$/.test(snap.id) &&
+        !workspaces.value.some((w) => w.id === snap.id)
+      )
+        ws.id = snap.id
       ws.cwd = typeof snap.cwd === 'string' && snap.cwd ? snap.cwd : null
       try {
         ws.tree = await deserializeNode(snap.tree, ws.cwd)
@@ -1966,345 +2087,309 @@ onBeforeUnmount(() => {
 <template>
   <div class="app">
     <div class="toolbar">
-      <div class="brand" :class="{ dev: isDev }">
-        <svg
-          class="brand-logo"
-          width="18"
-          height="18"
-          viewBox="0 0 24 24"
-          fill="none"
-          aria-hidden="true"
-        >
-          <rect
-            x="2"
-            y="3"
-            width="20"
-            height="18"
-            rx="4"
-            stroke="currentColor"
-            stroke-width="1.8"
-          />
-          <path d="M12 3v18M12 12h10" stroke="currentColor" stroke-width="1.8" />
-          <path
-            d="M5.5 8.5l2 1.8-2 1.8"
-            stroke="currentColor"
-            stroke-width="1.6"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-        </svg>
-        <span class="brand-name">Tessel</span>
-        <span v-if="isDev" class="brand-dev" title="Development build (npm run dev)">(dev)</span>
-      </div>
-
-      <div class="split-btn launch-trigger" @pointerdown.stop>
-        <button
-          class="split-btn-main"
-          :title="`New ${selectedShellName()} (Ctrl+Shift+T)`"
-          @click="newDefaultTerminal"
-        >
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <!-- Left: who and where (app, then the workspace switcher). -->
+      <div class="tb-left">
+        <div class="brand" :class="{ dev: isDev }">
+          <svg
+            class="brand-logo"
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden="true"
+          >
+            <rect
+              x="2"
+              y="3"
+              width="20"
+              height="18"
+              rx="4"
+              stroke="currentColor"
+              stroke-width="1.8"
+            />
+            <path d="M12 3v18M12 12h10" stroke="currentColor" stroke-width="1.8" />
             <path
-              d="M8 3v10M3 8h10"
+              d="M5.5 8.5l2 1.8-2 1.8"
               stroke="currentColor"
               stroke-width="1.6"
               stroke-linecap="round"
+              stroke-linejoin="round"
             />
           </svg>
-          <BrandIcon :kind="selectedShell || ''" :size="15" />
-          <span class="trigger-label">{{ selectedShellName() }}</span>
-        </button>
-        <button
-          class="split-btn-more"
-          :class="{ open: launcher.open }"
-          title="Open a terminal or agent (Ctrl+Shift+Space)"
-          aria-haspopup="menu"
-          :aria-expanded="launcher.open"
-          @click="toggleLauncher"
-        >
-          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+          <span class="brand-name">Tessel</span>
+          <span v-if="isDev" class="brand-dev" title="Development build (npm run dev)">dev</span>
+        </div>
+        <span class="tb-slash">/</span>
+        <div class="menu-group" @pointerdown.stop>
+          <button
+            class="tb-ws"
+            :class="{ open: openMenu === 'workspaces' }"
+            title="Switch workspace (Ctrl+PageUp / Ctrl+PageDown)"
+            aria-haspopup="menu"
+            @click="toggleMenu('workspaces')"
+          >
+            <span class="tb-ws-name">{{ currentWs ? currentWs.name : 'Workspace' }}</span>
+            <svg
+              class="chev"
+              width="10"
+              height="10"
+              viewBox="0 0 16 16"
+              fill="none"
+              aria-hidden="true"
+            >
+              <path
+                d="M4 6l4 4 4-4"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+          <div v-if="openMenu === 'workspaces'" class="toolbar-menu ws-menu" role="menu">
+            <div class="menu-label">Workspaces</div>
+            <button
+              v-for="w in workspaces"
+              :key="w.id"
+              class="toolbar-menu-item"
+              :class="{ selected: w.id === currentWsId }"
+              role="menuitem"
+              @click="menuAction(() => selectWorkspace(w.id))"
+            >
+              <span class="menu-item-name">{{ w.name }}</span>
+              <span v-if="w.cwd" class="menu-shortcut ws-path">{{ w.cwd }}</span>
+              <svg
+                v-if="w.id === currentWsId"
+                class="check"
+                width="12"
+                height="12"
+                viewBox="0 0 16 16"
+                fill="none"
+                aria-hidden="true"
+              >
+                <path
+                  d="M3 8.5l3.2 3L13 4.5"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+            <div class="menu-sep"></div>
+            <button class="toolbar-menu-item" role="menuitem" @click="menuAction(createWorkspace)">
+              <span class="menu-item-name">New workspace</span>
+              <span class="menu-shortcut">Ctrl+Shift+N</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Middle: one search box that finds panes, workspaces and commands. -->
+      <div class="tb-center">
+        <button class="tb-command" title="Command palette (Ctrl+Shift+P)" @click="openPalette">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <circle cx="7" cy="7" r="4.6" stroke="currentColor" stroke-width="1.4" />
             <path
-              d="M2.5 4l2.5 2.5L7.5 4"
+              d="M10.4 10.4L14 14"
               stroke="currentColor"
               stroke-width="1.4"
-              fill="none"
+              stroke-linecap="round"
+            />
+          </svg>
+          <span class="tb-command-text">Search panes, run a command</span>
+          <kbd class="tb-command-kbd">Ctrl+Shift+P</kbd>
+        </button>
+      </div>
+
+      <!-- Right: create, then icon-only toggles with tooltips. -->
+      <div class="tb-right">
+        <button
+          v-if="updateStatus.state === 'ready'"
+          class="tb-update"
+          :title="`Tessel ${updateStatus.version} is ready: restart to update`"
+          @click="updateOpen = true"
+        >
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path
+              d="M8 12.5V3.5M4.2 7.3L8 3.5l3.8 3.8"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+          Update {{ updateStatus.version }}
+        </button>
+
+        <div class="tb-newsplit launch-trigger" @pointerdown.stop>
+          <button
+            class="tb-icon"
+            :title="`New ${selectedShellName()} (Ctrl+Shift+T)`"
+            aria-label="New terminal"
+            @click="newDefaultTerminal"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path
+                d="M8 3.2v9.6M3.2 8h9.6"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+          <button
+            class="tb-icon tb-icon-narrow"
+            :class="{ open: launcher.open }"
+            title="Open a terminal or an agent (Ctrl+Shift+Space)"
+            aria-haspopup="menu"
+            :aria-expanded="launcher.open"
+            @click="toggleLauncher"
+          >
+            <svg width="10" height="10" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path
+                d="M4 6l4 4 4-4"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+        </div>
+
+        <span class="toolbar-sep"></span>
+
+        <button
+          class="tb-icon"
+          :class="{ on: broadcast, warn: broadcast }"
+          :title="`Broadcast is ${broadcast ? 'on' : 'off'}: type once into every pane with write checked (Ctrl+Shift+B)`"
+          aria-label="Broadcast"
+          :aria-pressed="broadcast"
+          @click="toggleBroadcast"
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <circle cx="8" cy="8" r="1.5" fill="currentColor" />
+            <path
+              d="M5.3 5.3a3.8 3.8 0 000 5.4M10.7 5.3a3.8 3.8 0 010 5.4M3.3 3.3a6.6 6.6 0 000 9.4M12.7 3.3a6.6 6.6 0 010 9.4"
+              stroke="currentColor"
+              stroke-width="1.3"
+              stroke-linecap="round"
+            />
+          </svg>
+        </button>
+        <button
+          class="tb-icon"
+          :class="{ on: taskPanelOpen }"
+          title="Task board (Ctrl+Shift+K)"
+          aria-label="Task board"
+          :aria-pressed="taskPanelOpen"
+          @click="toggleTaskPanel"
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <rect
+              x="2"
+              y="2.5"
+              width="12"
+              height="11"
+              rx="2"
+              stroke="currentColor"
+              stroke-width="1.3"
+            />
+            <path
+              d="M5 6.2l1.3 1.3L8.6 5.2M5 10.3h6"
+              stroke="currentColor"
+              stroke-width="1.3"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </button>
+        <div class="menu-group" @pointerdown.stop>
+          <button
+            class="tb-icon"
+            :class="{ open: openMenu === 'layout' }"
+            title="Layout: split and arrange panes"
+            aria-label="Layout"
+            aria-haspopup="menu"
+            @click="toggleMenu('layout')"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <rect
+                x="1.8"
+                y="2.3"
+                width="12.4"
+                height="11.4"
+                rx="2"
+                stroke="currentColor"
+                stroke-width="1.3"
+              />
+              <path d="M8 2.3v11.4M8 8h6.2" stroke="currentColor" stroke-width="1.3" />
+            </svg>
+          </button>
+          <div
+            v-if="openMenu === 'layout'"
+            class="toolbar-menu align-right layout-menu"
+            role="menu"
+          >
+            <button
+              class="toolbar-menu-item"
+              role="menuitem"
+              @click="menuAction(() => splitActive('row'))"
+            >
+              <span class="menu-item-name">Split right</span>
+              <span class="menu-shortcut">Ctrl+Shift+E</span>
+            </button>
+            <button
+              class="toolbar-menu-item"
+              role="menuitem"
+              @click="menuAction(() => splitActive('col'))"
+            >
+              <span class="menu-item-name">Split down</span>
+              <span class="menu-shortcut">Ctrl+Shift+O</span>
+            </button>
+            <div class="menu-sep"></div>
+            <div class="menu-label">Even grid</div>
+            <div class="grid-chips">
+              <button
+                v-for="option in gridOptions"
+                :key="option.value"
+                class="grid-chip"
+                :title="`Arrange this workspace into ${option.label}`"
+                @click="applyGrid(option.value)"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+            <div class="menu-sep"></div>
+            <button
+              class="toolbar-menu-item danger"
+              role="menuitem"
+              @click="menuAction(closeActive)"
+            >
+              <span class="menu-item-name">Close active pane</span>
+              <span class="menu-shortcut">Ctrl+Shift+W</span>
+            </button>
+          </div>
+        </div>
+        <button
+          class="tb-icon"
+          title="Settings (Ctrl+,)"
+          aria-label="Settings"
+          @click="settingsOpen = true"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 15a3 3 0 100-6 3 3 0 000 6z" stroke="currentColor" stroke-width="1.6" />
+            <path
+              d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"
+              stroke="currentColor"
+              stroke-width="1.6"
               stroke-linecap="round"
               stroke-linejoin="round"
             />
           </svg>
         </button>
       </div>
-
-      <span class="toolbar-sep"></span>
-
-      <div class="tb-group">
-        <button class="tb-icon" title="Split right (Ctrl+Shift+E)" @click="splitActive('row')">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <rect
-              x="1.5"
-              y="2.5"
-              width="13"
-              height="11"
-              rx="2"
-              stroke="currentColor"
-              stroke-width="1.3"
-            />
-            <path d="M8 2.5v11" stroke="currentColor" stroke-width="1.3" />
-          </svg>
-        </button>
-        <button class="tb-icon" title="Split down (Ctrl+Shift+O)" @click="splitActive('col')">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <rect
-              x="1.5"
-              y="2.5"
-              width="13"
-              height="11"
-              rx="2"
-              stroke="currentColor"
-              stroke-width="1.3"
-            />
-            <path d="M1.5 8h13" stroke="currentColor" stroke-width="1.3" />
-          </svg>
-        </button>
-        <div class="menu-group" @pointerdown.stop>
-          <button
-            class="tb-icon"
-            :class="{ open: gridMenuOpen }"
-            title="Arrange into an even grid"
-            @click="toggleGridMenu"
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <rect
-                x="1.5"
-                y="1.5"
-                width="5.5"
-                height="5.5"
-                rx="1.3"
-                stroke="currentColor"
-                stroke-width="1.3"
-              />
-              <rect
-                x="9"
-                y="1.5"
-                width="5.5"
-                height="5.5"
-                rx="1.3"
-                stroke="currentColor"
-                stroke-width="1.3"
-              />
-              <rect
-                x="1.5"
-                y="9"
-                width="5.5"
-                height="5.5"
-                rx="1.3"
-                stroke="currentColor"
-                stroke-width="1.3"
-              />
-              <rect
-                x="9"
-                y="9"
-                width="5.5"
-                height="5.5"
-                rx="1.3"
-                stroke="currentColor"
-                stroke-width="1.3"
-              />
-            </svg>
-          </button>
-          <div v-if="gridMenuOpen" class="toolbar-menu grid-menu">
-            <div class="menu-label">Even grid</div>
-            <button
-              v-for="option in gridOptions"
-              :key="option.value"
-              class="toolbar-menu-item"
-              @pointerdown="applyGrid(option.value)"
-            >
-              <span class="menu-item-name">{{ option.label }}</span>
-            </button>
-          </div>
-        </div>
-        <button
-          class="tb-icon danger"
-          title="Close active pane (Ctrl+Shift+W)"
-          @click="closeActive"
-        >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path
-              d="M4 4l8 8M12 4l-8 8"
-              stroke="currentColor"
-              stroke-width="1.4"
-              stroke-linecap="round"
-            />
-          </svg>
-        </button>
-      </div>
-
-      <button
-        class="tb-toggle broadcast-toggle"
-        :class="{ on: broadcast }"
-        title="Broadcast: type once into every pane with write checked (Ctrl+Shift+B)"
-        @click="toggleBroadcast"
-      >
-        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <circle cx="8" cy="8" r="1.6" fill="currentColor" />
-          <path
-            d="M5 5a4.2 4.2 0 000 6M11 5a4.2 4.2 0 010 6M3 3a7 7 0 000 10M13 3a7 7 0 010 10"
-            stroke="currentColor"
-            stroke-width="1.3"
-            stroke-linecap="round"
-          />
-        </svg>
-        <span>Broadcast</span>
-      </button>
-
-      <div class="spacer"></div>
-
-      <button
-        class="tb-toggle tasks-toggle"
-        :class="{ on: taskPanelOpen }"
-        title="Toggle the agent task board (Ctrl+Shift+K)"
-        @click="toggleTaskPanel"
-      >
-        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <rect
-            x="1.5"
-            y="2"
-            width="3.6"
-            height="12"
-            rx="1"
-            stroke="currentColor"
-            stroke-width="1.3"
-          />
-          <rect
-            x="6.2"
-            y="2"
-            width="3.6"
-            height="8"
-            rx="1"
-            stroke="currentColor"
-            stroke-width="1.3"
-          />
-          <rect
-            x="10.9"
-            y="2"
-            width="3.6"
-            height="10"
-            rx="1"
-            stroke="currentColor"
-            stroke-width="1.3"
-          />
-        </svg>
-        <span>Tasks</span>
-      </button>
-
-      <span class="toolbar-sep"></span>
-
-      <button
-        class="tb-icon"
-        title="Agent sessions: resume past conversations"
-        @click="openSessions"
-      >
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <path
-            d="M2.2 8a5.8 5.8 0 101.7-4.1"
-            stroke="currentColor"
-            stroke-width="1.3"
-            stroke-linecap="round"
-          />
-          <path
-            d="M2 2.6v2.6h2.6"
-            stroke="currentColor"
-            stroke-width="1.3"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-          <path
-            d="M8 5v3.2l2.2 1.4"
-            stroke="currentColor"
-            stroke-width="1.3"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-        </svg>
-      </button>
-      <button
-        class="tb-icon"
-        title="Tools: install agents, Git, Node.js and more"
-        @click="openTools"
-      >
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <path
-            d="M2.5 5.2L8 2.3l5.5 2.9v5.6L8 13.7l-5.5-2.9V5.2z"
-            stroke="currentColor"
-            stroke-width="1.3"
-            stroke-linejoin="round"
-          />
-          <path
-            d="M2.5 5.2L8 8.1l5.5-2.9M8 8.1v5.6"
-            stroke="currentColor"
-            stroke-width="1.3"
-            stroke-linejoin="round"
-          />
-        </svg>
-      </button>
-      <button class="tb-icon" title="MCP servers: give agents extra tools" @click="mcpOpen = true">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <path
-            d="M6 1.8v3M10 1.8v3"
-            stroke="currentColor"
-            stroke-width="1.3"
-            stroke-linecap="round"
-          />
-          <path
-            d="M3.8 4.8h8.4v2.6a4.2 4.2 0 01-8.4 0V4.8z"
-            stroke="currentColor"
-            stroke-width="1.3"
-            stroke-linejoin="round"
-          />
-          <path d="M8 11.6v2.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
-        </svg>
-      </button>
-      <button
-        v-if="updateStatus.state === 'ready'"
-        class="tb-update"
-        :title="`Tessel ${updateStatus.version} is ready: restart to update`"
-        @click="updateOpen = true"
-      >
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <path
-            d="M8 12.5V3.5M4.2 7.3L8 3.5l3.8 3.8"
-            stroke="currentColor"
-            stroke-width="1.6"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-        </svg>
-        Update {{ updateStatus.version }}
-      </button>
-      <button class="tb-icon" title="Settings (Ctrl+,)" @click="settingsOpen = true">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <circle cx="8" cy="8" r="2.2" stroke="currentColor" stroke-width="1.3" />
-          <path
-            d="M8 1.5v1.8M8 12.7v1.8M14.5 8h-1.8M3.3 8H1.5M12.6 3.4l-1.3 1.3M4.7 11.3l-1.3 1.3M12.6 12.6l-1.3-1.3M4.7 4.7L3.4 3.4"
-            stroke="currentColor"
-            stroke-width="1.3"
-            stroke-linecap="round"
-          />
-        </svg>
-      </button>
-      <button class="tb-icon" title="Keyboard shortcuts (F1)" @click="helpOpen = !helpOpen">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <circle cx="8" cy="8" r="6.3" stroke="currentColor" stroke-width="1.3" />
-          <path
-            d="M6.3 6.2a1.8 1.8 0 113 1.4c-.7.4-1.3.8-1.3 1.6"
-            stroke="currentColor"
-            stroke-width="1.3"
-            stroke-linecap="round"
-          />
-          <circle cx="8" cy="11.4" r=".8" fill="currentColor" />
-        </svg>
-      </button>
     </div>
 
     <div v-if="broadcast" class="broadcast-banner">
@@ -2343,7 +2428,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <aside v-if="taskPanelOpen" class="task-panel">
-        <TaskBoard :agent-panes="agentPanes" />
+        <TaskBoard :agent-panes="agentPanes" :workspace-id="currentWsId" />
       </aside>
     </div>
 
@@ -2440,6 +2525,8 @@ onBeforeUnmount(() => {
       @install="installUpdate"
       @close="updateOpen = false"
     />
+
+    <CommandPalette v-if="paletteOpen" :commands="paletteCommands" @close="paletteOpen = false" />
 
     <SettingsDialog
       v-if="settingsOpen"

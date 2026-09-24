@@ -10,9 +10,12 @@ import { COLUMNS } from '../../../shared/taskModel'
 import { tasks, addTask } from '../taskBoardStore'
 import TaskCard from './TaskCard.vue'
 
-defineProps({
+const props = defineProps({
   // Agent panes available for assignment, forwarded to every card.
-  agentPanes: { type: Array, default: () => [] }
+  agentPanes: { type: Array, default: () => [] },
+  // Each workspace has its own board: show and add tasks for this one.
+  // (null shows every task.)
+  workspaceId: { type: String, default: null }
 })
 
 const newTitle = ref('')
@@ -22,6 +25,7 @@ const newTitle = ref('')
 const grouped = computed(() => {
   const groups = Object.fromEntries(COLUMNS.map((c) => [c, []]))
   for (const task of tasks) {
+    if (props.workspaceId && task.wsId !== props.workspaceId) continue
     if (groups[task.column]) groups[task.column].push(task)
   }
   return groups
@@ -32,7 +36,7 @@ function onAdd() {
   // Guard before calling the store — createTask throws on an empty title, and a
   // blank submit should simply be a no-op.
   if (!title) return
-  addTask({ title })
+  addTask({ title, wsId: props.workspaceId })
   newTitle.value = ''
 }
 
