@@ -7,9 +7,29 @@ import { settings, FONT_FAMILIES, resetSettings, clamp } from '../settings'
 
 defineProps({
   shells: { type: Array, default: () => [] },
-  defaultShell: { type: String, default: null }
+  defaultShell: { type: String, default: null },
+  updateStatus: { type: Object, default: () => ({ state: 'disabled' }) }
 })
-const emit = defineEmits(['close', 'set-default-shell'])
+const emit = defineEmits(['close', 'set-default-shell', 'check-updates', 'open-update'])
+
+function updateText(u) {
+  switch (u.state) {
+    case 'checking':
+      return 'Checking for updates…'
+    case 'none':
+      return 'You have the latest version.'
+    case 'downloading':
+      return `Downloading ${u.version}${u.percent ? ` (${u.percent}%)` : ''}…`
+    case 'ready':
+      return `Version ${u.version} is ready to install.`
+    case 'error':
+      return 'Could not check for updates. Try again later.'
+    case 'disabled':
+      return 'Only the installed app updates itself.'
+    default:
+      return 'Checks automatically every few hours.'
+  }
+}
 
 const cardEl = ref(null)
 const languages = ref([])
@@ -215,6 +235,31 @@ const CURSORS = [
           </div>
           <input v-model="settings.inAppAlerts" type="checkbox" class="set-switch" />
         </label>
+      </section>
+
+      <section class="set-section">
+        <h3>Updates</h3>
+        <div class="set-row">
+          <div class="set-label">
+            Shell Panels {{ updateStatus.current || '' }}
+            <span class="set-hint">{{ updateText(updateStatus) }}</span>
+          </div>
+          <button
+            v-if="updateStatus.state === 'ready'"
+            class="exit-btn primary"
+            @click="emit('open-update')"
+          >
+            Restart and update
+          </button>
+          <button
+            v-else
+            class="exit-btn"
+            :disabled="['disabled', 'checking', 'downloading'].includes(updateStatus.state)"
+            @click="emit('check-updates')"
+          >
+            Check for updates
+          </button>
+        </div>
       </section>
 
       <div class="set-foot">

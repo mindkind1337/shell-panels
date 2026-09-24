@@ -12,7 +12,7 @@ export default defineConfig({
         // runtime. (Setting rollupOptions replaces electron-vite's defaults,
         // and a bundled copy of the \`electron\` npm package tries to
         // "install" Electron by relaunching the app, in an endless loop.)
-        external: ['electron', /^electron\/.+/, 'node-pty', /^node:/],
+        external: ['electron', /^electron\/.+/, 'node-pty', 'electron-updater', /^node:/],
         // Two entry points: the app's main process, and the terminal host it
         // starts as a separate background process.
         input: {

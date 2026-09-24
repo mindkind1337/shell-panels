@@ -2997,3 +2997,62 @@ body.pane-dragging * {
 .help-logs .set-hint {
   flex: 1 1 200px;
 }
+
+/* ================= Updates ================= */
+.tb-update {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  margin-right: 4px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #0b1530;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tb-update:hover {
+  filter: brightness(1.1);
+}
+
+.update-card {
+  width: min(520px, 100%);
+}
+
+.update-line {
+  margin: 8px 0;
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.update-line.dim {
+  color: var(--text-dim);
+}
+
+.update-notes {
+  max-height: 220px;
+  overflow-y: auto;
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.update-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}

@@ -22,3 +22,4 @@ Thumbs.db
 .claude/settings.local.json
 .claude/*.lock
 .claude/scheduled_tasks.lock
+dev-app-update.yml

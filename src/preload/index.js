@@ -59,6 +59,19 @@ const api = {
     save: (tasks) => ipcRenderer.invoke('taskboard:save', tasks)
   },
 
+  // Updates (see src/main/updater.js).
+  update: {
+    status: () => ipcRenderer.invoke('update:status'),
+    check: () => ipcRenderer.invoke('update:check'),
+    install: () => ipcRenderer.invoke('update:install'),
+    justInstalled: () => ipcRenderer.invoke('update:justInstalled'),
+    onStatus: (cb) => {
+      const handler = (_e, payload) => cb(payload)
+      ipcRenderer.on('update:status', handler)
+      return () => ipcRenderer.removeListener('update:status', handler)
+    }
+  },
+
   // Subscriptions return an unsubscribe function.
   onData: (cb) => {
     const handler = (_e, payload) => cb(payload)

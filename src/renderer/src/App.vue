@@ -6,6 +6,7 @@ import TaskBoard from './components/TaskBoard.vue'
 import WorkspaceSidebar from './components/WorkspaceSidebar.vue'
 import LaunchMenu from './components/LaunchMenu.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
+import UpdateDialog from './components/UpdateDialog.vue'
 import { settings, loadSettings, DEFAULT_SETTINGS } from './settings'
 import McpDialog from './components/McpDialog.vue'
 import ToolsDialog from './components/ToolsDialog.vue'
@@ -501,35 +502,39 @@ let saveTimer = null
 function scheduleSave() {
   if (!persistReady) return
   if (saveTimer) clearTimeout(saveTimer)
-  saveTimer = setTimeout(() => {
-    saveTimer = null
-    if (!workspaces.value.length) return
-    // JSON round-trip: IPC can only send plain data, and some values here
-    // (custom agents, worktree info) are Vue reactive proxies.
-    const snapshot = {
-      version: 2,
-      selectedShell: selectedShell.value,
-      broadcast: broadcast.value,
-      sidebarCollapsed: sidebarCollapsed.value,
-      sidebarWidth: sidebarWidth.value,
-      currentIndex: Math.max(
-        0,
-        workspaces.value.findIndex((w) => w.id === currentWsId.value)
-      ),
-      placement: placement.value,
-      settings: { ...settings },
-      workspaces: workspaces.value.map((w) => ({
-        name: w.name,
-        cwd: w.cwd || null,
-        tree: serializeNode(w.tree)
-      }))
-    }
-    try {
-      window.shellApi.saveLayout(JSON.parse(JSON.stringify(snapshot)))
-    } catch (err) {
-      console.error('Could not save the layout', err)
-    }
-  }, 500)
+  saveTimer = setTimeout(saveLayoutNow, 500)
+}
+
+// Write the layout right away (also used before an update restarts the app).
+function saveLayoutNow() {
+  if (saveTimer) clearTimeout(saveTimer)
+  saveTimer = null
+  if (!persistReady || !workspaces.value.length) return
+  // JSON round-trip: IPC can only send plain data, and some values here
+  // (custom agents, worktree info) are Vue reactive proxies.
+  const snapshot = {
+    version: 2,
+    selectedShell: selectedShell.value,
+    broadcast: broadcast.value,
+    sidebarCollapsed: sidebarCollapsed.value,
+    sidebarWidth: sidebarWidth.value,
+    currentIndex: Math.max(
+      0,
+      workspaces.value.findIndex((w) => w.id === currentWsId.value)
+    ),
+    placement: placement.value,
+    settings: { ...settings },
+    workspaces: workspaces.value.map((w) => ({
+      name: w.name,
+      cwd: w.cwd || null,
+      tree: serializeNode(w.tree)
+    }))
+  }
+  try {
+    window.shellApi.saveLayout(JSON.parse(JSON.stringify(snapshot)))
+  } catch (err) {
+    console.error('Could not save the layout', err)
+  }
 }
 
 async function splitLeaf(
@@ -710,6 +715,70 @@ function scheduleTaskSave() {
     taskSaveTimer = null
     window.shellApi.taskBoard.save(boardTasks.map((t) => ({ ...t })))
   }, 500)
+}
+
+// --- Updates ------------------------------------------------------------------
+// The main process downloads new versions in the background (updater.js); the
+// toolbar shows a button once one is ready, and installing restarts the app
+// with every pane reopened where it was.
+const updateStatus = ref({ state: 'disabled' })
+const updateOpen = ref(false)
+const updateInstalling = ref(false)
+let unsubUpdate = null
+
+function paneCount() {
+  let n = 0
+  forEachWsLeaf(() => n++)
+  return n
+}
+
+async function checkForUpdates() {
+  if (!window.shellApi.update) return
+  updateStatus.value = await window.shellApi.update.check()
+}
+
+async function installUpdate() {
+  if (updateInstalling.value) return
+  updateInstalling.value = true
+  // Write everything now instead of waiting for the debounced saves.
+  saveLayoutNow()
+  if (taskSaveTimer) {
+    clearTimeout(taskSaveTimer)
+    taskSaveTimer = null
+    try {
+      await window.shellApi.taskBoard.save(boardTasks.map((t) => ({ ...t })))
+    } catch {
+      /* best-effort */
+    }
+  }
+  const ok = await window.shellApi.update.install()
+  if (!ok) {
+    updateInstalling.value = false
+    showToast('The update is not ready to install yet.', { kind: 'error' })
+  }
+}
+
+async function initUpdates() {
+  const api = window.shellApi.update
+  if (!api) return
+  unsubUpdate = api.onStatus((s) => {
+    const wasReady = updateStatus.value.state === 'ready'
+    updateStatus.value = s
+    if (s.state === 'ready' && !wasReady) {
+      showToast(`Shell Panels ${s.version} is ready to install.`, {
+        kind: 'attention',
+        timeout: 15000,
+        action: { label: 'Update', run: () => (updateOpen.value = true) }
+      })
+    }
+  })
+  updateStatus.value = await api.status()
+  const done = await api.justInstalled()
+  if (done) {
+    showToast(`Updated to Shell Panels ${done.to}. Your panes were restored.`, {
+      timeout: 8000
+    })
+  }
 }
 
 provide('panelCtx', {
@@ -1877,12 +1946,14 @@ onMounted(async () => {
   unsubFocusPane = window.shellApi.onFocusPane
     ? window.shellApi.onFocusPane(({ paneId }) => focusPane(paneId))
     : null
+  initUpdates()
 })
 
 let unsubFocusPane = null
 
 onBeforeUnmount(() => {
   if (unsubFocusPane) unsubFocusPane()
+  if (unsubUpdate) unsubUpdate()
   if (taskSaveTimer) clearTimeout(taskSaveTimer)
   window.removeEventListener('keydown', onKey)
   window.removeEventListener('pointerdown', onDocPointerDown, true)
@@ -2189,6 +2260,23 @@ onBeforeUnmount(() => {
           <path d="M8 11.6v2.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
         </svg>
       </button>
+      <button
+        v-if="updateStatus.state === 'ready'"
+        class="tb-update"
+        :title="`Shell Panels ${updateStatus.version} is ready: restart to update`"
+        @click="updateOpen = true"
+      >
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path
+            d="M8 12.5V3.5M4.2 7.3L8 3.5l3.8 3.8"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+        Update {{ updateStatus.version }}
+      </button>
       <button class="tb-icon" title="Settings (Ctrl+,)" @click="settingsOpen = true">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
           <circle cx="8" cy="8" r="2.2" stroke="currentColor" stroke-width="1.3" />
@@ -2339,10 +2427,22 @@ onBeforeUnmount(() => {
       @close="closeMcp"
     />
 
+    <UpdateDialog
+      v-if="updateOpen"
+      :status="updateStatus"
+      :panes="paneCount()"
+      :installing="updateInstalling"
+      @install="installUpdate"
+      @close="updateOpen = false"
+    />
+
     <SettingsDialog
       v-if="settingsOpen"
       :shells="shells"
       :default-shell="selectedShell"
+      :update-status="updateStatus"
+      @check-updates="checkForUpdates"
+      @open-update="((settingsOpen = false), (updateOpen = true))"
       @set-default-shell="setDefaultShell"
       @close="closeSettings"
     />

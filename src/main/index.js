@@ -9,6 +9,7 @@ import { createLogger, describe } from './logger'
 import { cleanEnv } from './cleanEnv'
 import { createPtyClient } from './ptyClient'
 import { pipeName } from './ptyProtocol'
+import { createUpdater } from './updater'
 import crypto from 'crypto'
 import {
   gitInfo,
@@ -875,6 +876,38 @@ async function shutdownTerminals() {
   }
 }
 
+// --- Updates (see updater.js) --------------------------------------------------
+// Installing closes the app the same way as closing it on purpose (layout and
+// terminal output saved, terminal host stopped so the installer can replace
+// its files), and leaves a note so the next start can say what changed.
+function updateNoteFile() {
+  return join(app.getPath('userData'), 'update-installed.json')
+}
+
+const updater = createUpdater({
+  log,
+  send,
+  beforeInstall: async (version) => {
+    fs.writeFileSync(updateNoteFile(), JSON.stringify({ from: app.getVersion(), to: version }))
+    await shutdownTerminals()
+    shutdownDone = true
+  }
+})
+
+ipcMain.handle('update:status', () => updater.status)
+ipcMain.handle('update:check', () => updater.check())
+ipcMain.handle('update:install', () => updater.install())
+// After an update: { from, to } once, on the first start of the new version.
+ipcMain.handle('update:justInstalled', () => {
+  try {
+    const note = JSON.parse(fs.readFileSync(updateNoteFile(), 'utf8'))
+    fs.unlinkSync(updateNoteFile())
+    return note && note.to === app.getVersion() ? note : null
+  } catch {
+    return null
+  }
+})
+
 // ---------------------------------------------------------------------------
 // Window
 // ---------------------------------------------------------------------------
@@ -1019,13 +1052,35 @@ function ensureDevShortcut() {
   return repaired
 }
 
+// One running copy at a time. The dev build and the installed app share the
+// same saved data (%APPDATA%\shell-panels); two copies at once would overwrite
+// each other's layout and saved output. Opening a second copy focuses the
+// first instead. (SHELL_PANELS_USER_DATA gives tests their own data, so they
+// get their own lock.)
+const gotInstanceLock = app.requestSingleInstanceLock()
+if (!gotInstanceLock) {
+  // Quit without touching the terminal host: it belongs to the running copy.
+  log.info('app', 'another Shell Panels is already running: focusing it and exiting')
+  shutdownDone = true
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow) return
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+  })
+}
+
 app.whenReady().then(() => {
+  if (!gotInstanceLock) return
   log.info(
     'app',
     `started v${app.getVersion()} (${app.isPackaged ? 'installed' : 'dev'}) electron ${process.versions.electron} node ${process.versions.node} ${process.platform} ${os.release()} ${os.arch()}`
   )
   ensureDevShortcut()
   createWindow()
+  updater.start()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })

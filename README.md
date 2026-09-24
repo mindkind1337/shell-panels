@@ -114,6 +114,30 @@ for testing.
 Saved workspaces, settings and tasks live in `%APPDATA%\shell-panels`, shared
 by the installed app and the dev build.
 
+## Updates
+
+The installed app checks the GitHub releases of this repo 15 seconds after it
+starts, then every 4 hours (`src/main/updater.js`, using `electron-updater`).
+A newer version downloads in the background, then an **Update x.y.z** button
+appears in the toolbar (also under Settings → Updates). **Restart and update**
+saves the layout, task board and terminal output, stops the terminal host,
+installs silently and reopens the app, and each pane comes back where it was
+(Claude and Codex resume their conversations). Nothing installs until you click.
+Programs running in the terminals do stop.
+
+To publish a release:
+
+1. Bump `version` in `package.json`.
+2. `npm run dist`
+3. Create a GitHub release tagged `vX.Y.Z` and upload **all three** files from
+   `dist/`: `Shell-Panels-Setup-X.Y.Z.exe`, its `.blockmap`, and `latest.yml`
+   (the app reads `latest.yml` to find the new version).
+
+Testing without publishing: create `dev-app-update.yml` (git-ignored) pointing
+at a local feed (`provider: generic`, `url: http://127.0.0.1:8765/`), and start
+a dev build with `SP_UPDATE_TEST=1` (and `SHELL_PANELS_USER_DATA` /
+`SP_PTYHOST_CHANNEL` so it doesn't touch your real app).
+
 ## Run it
 
 ```sh

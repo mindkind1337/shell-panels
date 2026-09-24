@@ -1,6 +1,6 @@
 {
   "name": "shell-panels",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Split-panel multi-terminal for Windows (Electron + Vue + xterm.js + node-pty)",
   "main": "out/main/index.js",
   "author": "Jean-Claude Trottier",
@@ -13,10 +13,11 @@
     "lint": "eslint . --fix",
     "format": "prettier --write .",
     "test": "vitest run",
-    "dist": "npm run build && electron-builder --win --x64",
-    "dist:dir": "npm run build && electron-builder --win --x64 --dir"
+    "dist": "npm run build && electron-builder --win --x64 --publish never",
+    "dist:dir": "npm run build && electron-builder --win --x64 --dir --publish never"
   },
   "dependencies": {
+    "electron-updater": "^6.8.9",
     "node-pty": "^1.1.0"
   },
   "devDependencies": {
@@ -81,6 +82,14 @@
       "shortcutName": "Shell Panels",
       "uninstallDisplayName": "Shell Panels",
       "deleteAppDataOnUninstall": false
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "mindkind1337",
+        "repo": "shell-panels",
+        "releaseType": "release"
+      }
+    ]
   }
 }
