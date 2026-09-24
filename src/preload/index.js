@@ -19,6 +19,7 @@ const api = {
   killPty: (id) => ipcRenderer.send('pty:kill', { id }),
 
   pickFolder: (opts) => ipcRenderer.invoke('dialog:pickFolder', opts),
+  teamNotes: (opts) => ipcRenderer.invoke('team:ensureNotes', opts),
   homeDir: () => ipcRenderer.invoke('app:homeDir'),
   systemLocale: () => ipcRenderer.invoke('app:systemLocale'),
   log: (level, message) => ipcRenderer.send('log:write', { level, message }),

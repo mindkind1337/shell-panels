@@ -3734,3 +3734,57 @@ body.pane-dragging * {
 .ws-team-member.waiting .ws-team-member-where {
   color: #ffd98f;
 }
+
+/* Message box under a team in the sidebar. */
+.ws-team-message {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 4px 8px 4px 10px;
+}
+
+.ws-team-message textarea {
+  width: 100%;
+  min-height: 54px;
+  resize: vertical;
+  padding: 6px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+.ws-team-message textarea:focus {
+  border-color: var(--team);
+}
+
+.ws-team-message-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.ws-team-message-actions button {
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ws-team-message-actions .ws-team-message-send {
+  border-color: color-mix(in srgb, var(--team) 60%, transparent);
+  background: color-mix(in srgb, var(--team) 22%, transparent);
+  color: var(--text-strong);
+}
+
+.ws-team-message-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

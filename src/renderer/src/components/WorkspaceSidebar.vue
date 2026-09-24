@@ -27,6 +27,8 @@ const emit = defineEmits([
   'rename-team',
   'gather-team',
   'disband-team',
+  'brief-team',
+  'message-team',
   'folder',
   'select',
   'create',
@@ -164,6 +166,27 @@ function cancelTeamRename() {
   editingTeamId.value = null
 }
 
+// --- Teams: one message to every agent --------------------------------------
+const messagingTeamId = ref(null)
+const messageDraft = ref('')
+const messageEls = {}
+
+function startTeamMessage(team) {
+  messagingTeamId.value = messagingTeamId.value === team.id ? null : team.id
+  messageDraft.value = ''
+  nextTick(() => {
+    const el = messageEls[team.id]
+    if (el) el.focus()
+  })
+}
+
+function sendTeamMessage() {
+  const text = messageDraft.value.trim()
+  if (text) emit('message-team', messagingTeamId.value, text)
+  messagingTeamId.value = null
+  messageDraft.value = ''
+}
+
 defineExpose({
   startRename: (id) => {
     const item = props.items.find((i) => i.id === id)
@@ -172,6 +195,10 @@ defineExpose({
   startTeamRename: (id) => {
     const team = props.teams.find((t) => t.id === id)
     if (team) startTeamRename(team)
+  },
+  startTeamMessage: (id) => {
+    const team = props.teams.find((t) => t.id === id)
+    if (team && messagingTeamId.value !== id) startTeamMessage(team)
   }
 })
 </script>
@@ -369,6 +396,35 @@ defineExpose({
             </button>
             <button
               class="ws-icon-btn small"
+              title="Message every agent of the team"
+              @click="startTeamMessage(t)"
+            >
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path
+                  d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2v-7z"
+                  stroke="currentColor"
+                  stroke-width="1.4"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+            <button
+              class="ws-icon-btn small"
+              title="Brief: shared notes file, and tell each agent its teammates"
+              @click="emit('brief-team', t.id)"
+            >
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path
+                  d="M4 2.5h6l2.5 2.5v8.5H4v-11zM6 7h4.5M6 9.5h4.5"
+                  stroke="currentColor"
+                  stroke-width="1.4"
+                  stroke-linejoin="round"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </button>
+            <button
+              class="ws-icon-btn small"
               title="Gather: side by side in a workspace named after the team"
               @click="emit('gather-team', t.id)"
             >
@@ -403,8 +459,30 @@ defineExpose({
             :size="13"
           />
           <span class="ws-team-member-name">{{ m.title }}</span>
-          <span class="ws-team-member-where">{{ m.here ? SESSION_STATE[m.state] : m.where }}</span>
+          <span class="ws-team-member-where">{{
+            m.held ? 'Message waits for your approval' : m.here ? SESSION_STATE[m.state] : m.where
+          }}</span>
         </button>
+        <div v-if="messagingTeamId === t.id" class="ws-team-message">
+          <textarea
+            :ref="(el) => (messageEls[t.id] = el)"
+            v-model="messageDraft"
+            rows="3"
+            :placeholder="`Message every agent of ${t.name}… (Enter to send, Shift+Enter for a new line)`"
+            @keydown.enter.exact.prevent="sendTeamMessage"
+            @keydown.escape.prevent.stop="messagingTeamId = null"
+          ></textarea>
+          <div class="ws-team-message-actions">
+            <button class="ws-team-message-cancel" @click="messagingTeamId = null">Cancel</button>
+            <button
+              class="ws-team-message-send"
+              :disabled="!messageDraft.trim()"
+              @click="sendTeamMessage"
+            >
+              Send
+            </button>
+          </div>
+        </div>
       </div>
     </div>
 

@@ -83,6 +83,8 @@ function menuTeam(action, teamId) {
   else if (action === 'gather') ctx.gatherTeam(teamId)
   else if (action === 'disband') ctx.disbandTeam(teamId)
   else if (action === 'rename') ctx.startTeamRename(teamId)
+  else if (action === 'message') ctx.startTeamMessage(teamId)
+  else if (action === 'brief') ctx.briefTeam(teamId)
 }
 
 function acknowledge() {
@@ -754,7 +756,20 @@ onMounted(() => {
   paneApi = {
     paste: pasteText,
     submit: () => window.shellApi.writePty(props.node.id, '\r'),
-    getSelection: () => (term ? term.getSelection() : '')
+    getSelection: () => (term ? term.getSelection() : ''),
+    // The last `lines` non-empty rows on screen as plain text (a tall pane can
+    // have its content at the top and blank rows below).
+    screenText: (lines = 20) => {
+      if (!term) return ''
+      const buf = term.buffer.active
+      const out = []
+      for (let y = buf.baseY + term.rows - 1; y >= buf.baseY && out.length < lines; y--) {
+        const line = buf.getLine(y)
+        const text = line ? line.translateToString(true) : ''
+        if (text.trim()) out.unshift(text)
+      }
+      return out.join('\n')
+    }
   }
   registerPane(props.node.id, paneApi)
 
@@ -1265,6 +1280,12 @@ onBeforeUnmount(() => {
         <div class="ctx-menu-label">
           <span class="team-dot" :style="{ '--team': team.color }"></span>{{ team.name }}
         </div>
+        <button class="ctx-menu-item" @click="menuTeam('message', team.id)">
+          Message the team…<span class="ctx-menu-shortcut">every agent</span>
+        </button>
+        <button class="ctx-menu-item" @click="menuTeam('brief', team.id)">
+          Brief the team<span class="ctx-menu-shortcut">shared notes</span>
+        </button>
         <button class="ctx-menu-item" @click="menuTeam('gather', team.id)">
           Gather the team<span class="ctx-menu-shortcut">side by side</span>
         </button>

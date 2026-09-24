@@ -841,6 +841,8 @@ provide('panelCtx', {
   gatherTeam,
   disbandTeam,
   startTeamRename,
+  startTeamMessage,
+  briefTeam,
   copied: (what) => showToast(`${what} copied.`, { timeout: 2000 })
 })
 
@@ -946,6 +948,12 @@ function buildCommands() {
     const n = teamMembers(t.id).length
     add('Team', `Gather ${t.name}`, () => gatherTeam(t.id), {
       hint: `Side by side in their own workspace (${n} ${n === 1 ? 'pane' : 'panes'})`
+    })
+    add('Team', `Message ${t.name}`, () => startTeamMessage(t.id), {
+      hint: 'One message to every agent of the team'
+    })
+    add('Team', `Brief ${t.name}`, () => briefTeam(t.id), {
+      hint: 'Shared notes file + tell each agent its teammates'
     })
     add('Team', `Rename ${t.name}`, () => startTeamRename(t.id))
     add('Team', `Disband ${t.name}`, () => disbandTeam(t.id), { hint: 'Panes stay where they are' })
@@ -2004,6 +2012,184 @@ function gatherTeam(teamId) {
   refitSoon()
 }
 
+// --- Team messages ------------------------------------------------------------
+// What agent CLIs show while they wait for the user to approve something
+// (Codex, Claude Code, Gemini). Typing into such a prompt could answer it, so
+// a message waits until the prompt is gone.
+const APPROVAL_PROMPT =
+  /Would you like to (run|make|apply)|Press enter to confirm|Do you want to (proceed|make|create|allow|run)|Allow execution|Apply this change|\(y\/n\)|\[y\/N\]/i
+
+function awaitingApproval(leafId) {
+  const pane = getPane(leafId)
+  return !!(pane && pane.screenText && APPROVAL_PROMPT.test(pane.screenText(20)))
+}
+
+// Messages waiting for an agent to be free: leafId -> [text].
+const pendingMessages = reactive({})
+let pendingTimer = null
+
+function deliverToAgent(leafId, text) {
+  if (!pendingMessages[leafId]) pendingMessages[leafId] = []
+  pendingMessages[leafId].push(text)
+  flushPending()
+}
+
+// Paste each queued message and press Enter, except into panes that are
+// asking for approval: those are tried again every 2 seconds.
+function flushPending() {
+  let waiting = false
+  for (const id of Object.keys(pendingMessages)) {
+    const pane = getPane(id)
+    if (!pane || !findLeaf(id)) {
+      delete pendingMessages[id]
+      continue
+    }
+    if (awaitingApproval(id)) {
+      waiting = true
+      continue
+    }
+    const queue = pendingMessages[id]
+    delete pendingMessages[id]
+    queue.forEach((text, i) =>
+      setTimeout(() => {
+        pane.paste(text)
+        setTimeout(() => pane.submit(), 500)
+      }, i * 1500)
+    )
+  }
+  clearTimeout(pendingTimer)
+  pendingTimer = waiting ? setTimeout(flushPending, 2000) : null
+}
+
+function teamAgents(teamId) {
+  return teamMembers(teamId).filter((l) => l.kind === 'agent')
+}
+
+function teamRoster(teamId, exceptId) {
+  return teamAgents(teamId)
+    .filter((l) => l.id !== exceptId)
+    .map((l) => `#${l.num || '?'} ${l.title}${l.agentId ? ` (${l.agentId})` : ''}`)
+    .join(', ')
+}
+
+// Send one message to every agent of a team (never to plain shells, which
+// would run it as a command).
+function messageTeam(teamId, text) {
+  const team = teamById(teamId)
+  const body = String(text || '').trim()
+  if (!team || !body) return
+  const agents = teamAgents(teamId)
+  if (!agents.length) {
+    showToast(`${team.name} has no agent to message.`, { kind: 'error' })
+    return
+  }
+  for (const leaf of agents) deliverToAgent(leaf.id, `[Message to team ${team.name}] ${body}`)
+  const held = agents.filter((l) => pendingMessages[l.id])
+  showToast(
+    held.length
+      ? `Sent to ${agents.length - held.length} of ${agents.length} agents. ${held.map((l) => l.title).join(', ')} ${held.length === 1 ? 'is' : 'are'} waiting for your approval and will get it right after.`
+      : `Sent to ${agents.length} ${agents.length === 1 ? 'agent' : 'agents'} of ${team.name}.`,
+    { timeout: 4000 }
+  )
+}
+
+function slugify(name) {
+  return String(name || '')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+}
+
+function teamNotesTemplate(team) {
+  const today = new Date().toISOString().slice(0, 10)
+  const members = teamMembers(team.id)
+    .map((l) => `- #${l.num || '?'} ${l.title}${l.agentId ? ` (${l.agentId})` : ''}`)
+    .join('\n')
+  return `# Team ${team.name}
+
+Shared notes of the agents in this team (made by Tessel). Every agent reads
+this file before working and writes here what it does.
+
+## Members
+
+${members}
+
+## Who does what
+
+(Agree on it here: which agent owns which files or tasks.)
+
+## Rules
+
+- Edit only the files assigned to you above. To touch another agent's file,
+  say so in the journal first.
+- Commit only your own files (\`git add <file>\`, never \`git add -A\`). No
+  \`git checkout\`, \`reset\` or \`stash\` on shared work.
+- Do not commit this file.
+
+## Journal
+
+- ${today} Tessel: team created.
+`
+}
+
+// Create the team's shared notes file (once) and tell each agent who its
+// teammates are and where the file is.
+async function briefTeam(teamId) {
+  const team = teamById(teamId)
+  if (!team) return
+  const agents = teamAgents(teamId)
+  if (!agents.length) {
+    showToast(`Add an agent to ${team.name} first.`, { kind: 'error' })
+    return
+  }
+  const ws = wsOfLeaf(agents[0].id)
+  const dir = (ws && ws.cwd) || agents[0].startDir
+  if (!dir) {
+    showToast(`Set a project folder for "${ws ? ws.name : 'this workspace'}" first.`, {
+      kind: 'error'
+    })
+    return
+  }
+  if (!window.shellApi.teamNotes) {
+    showToast('Restart Tessel to enable team notes.', { kind: 'error' })
+    return
+  }
+  const res = await window.shellApi.teamNotes({
+    dir,
+    slug: slugify(team.name) || team.id,
+    content: teamNotesTemplate(team)
+  })
+  if (!res || !res.ok) {
+    showToast(`Could not create the team notes: ${(res && res.error) || 'unknown error'}`, {
+      kind: 'error'
+    })
+    return
+  }
+  for (const leaf of agents) {
+    const mates = teamRoster(teamId, leaf.id)
+    deliverToAgent(
+      leaf.id,
+      `[Tessel] You are in team "${team.name}"` +
+        (mates ? ` with ${mates}.` : ' (no other agent yet).') +
+        ` Shared notes: ${res.path} . Read that file now, agree there on who does what, ` +
+        'and add a dated line to its Journal section for each notable change. ' +
+        'Before editing a file another agent may be editing, check the notes. Do not commit that file.'
+    )
+  }
+  showToast(`Briefed ${agents.length} ${agents.length === 1 ? 'agent' : 'agents'}. Notes: ${res.path}`, {
+    timeout: 5000
+  })
+}
+
+// Open the sidebar's message box under a team.
+function startTeamMessage(teamId) {
+  if (sidebarCollapsed.value) toggleSidebar()
+  nextTick(() => sidebarEl.value && sidebarEl.value.startTeamMessage(teamId))
+}
+
 // A pane's agent state for the sidebar: 'working' | 'waiting' | 'ready'.
 function paneState(leaf) {
   if (leaf.kind !== 'agent') return 'ready'
@@ -2029,7 +2215,8 @@ const teamItems = computed(() =>
         accent: leaf.accent || null,
         where: ws ? ws.name : '',
         here: !!ws && ws.id === currentWsId.value,
-        state: paneState(leaf)
+        state: paneState(leaf),
+        held: !!pendingMessages[leaf.id]
       }
     })
   }))
@@ -2658,6 +2845,8 @@ onBeforeUnmount(() => {
         @rename-team="renameTeam"
         @gather-team="gatherTeam"
         @disband-team="disbandTeam"
+        @brief-team="briefTeam"
+        @message-team="messageTeam"
         @select="selectWorkspace"
         @create="createWorkspace"
         @rename="renameWorkspace"
