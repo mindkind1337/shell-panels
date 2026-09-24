@@ -30,6 +30,7 @@ const emit = defineEmits([
   'rename-team',
   'disband-team',
   'message-team',
+  'activity',
   'folder',
   'select',
   'create',
@@ -498,6 +499,21 @@ defineExpose({
               />
             </svg>
           </button>
+          <button
+            class="ws-icon-btn"
+            title="Activity: messages, approvals, limits and working time of these agents"
+            aria-label="Activity"
+            @click="emit('activity', 'workspace')"
+          >
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path
+                d="M2 13.5h12M4 11V8M7 11V4.5M10 11V6.5M13 11V9"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
         </template>
       </div>
       <div v-if="messagingId === currentId" class="ws-message">
@@ -559,16 +575,16 @@ defineExpose({
           </button>
           <button
             class="ws-icon-btn small"
-            title="Rename the team"
-            aria-label="Rename the team"
-            @click="startTeamRename(r.team)"
+            :title="`Activity of ${r.team.name}`"
+            aria-label="Team activity"
+            @click="emit('activity', 'team:' + r.team.id)"
           >
-            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
               <path
-                d="M10.5 2.5l3 3L6 13H3v-3l7.5-7.5z"
+                d="M2 13.5h12M4 11V8M7 11V4.5M10 11V6.5M13 11V9"
                 stroke="currentColor"
-                stroke-width="1.4"
-                stroke-linejoin="round"
+                stroke-width="1.5"
+                stroke-linecap="round"
               />
             </svg>
           </button>
