@@ -23,6 +23,9 @@ const api = {
   systemLocale: () => ipcRenderer.invoke('app:systemLocale'),
   log: (level, message) => ipcRenderer.send('log:write', { level, message }),
   openLogs: () => ipcRenderer.invoke('logs:open'),
+  // Updates only the native Windows controls overlay; the renderer chooses
+  // from validated named palettes instead of passing arbitrary CSS colors.
+  setWindowTheme: (theme) => ipcRenderer.send('window:theme', theme),
   diagnostics: () => ipcRenderer.invoke('logs:diagnostics'),
   claudeSessionExists: (id) => ipcRenderer.invoke('sessions:claudeExists', id),
   findCodexSession: (query) => ipcRenderer.invoke('sessions:findCodex', query),

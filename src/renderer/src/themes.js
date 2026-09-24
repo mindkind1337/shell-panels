@@ -31,5 +31,7 @@ export function terminalTheme(id) {
 }
 
 export function applyTheme(id) {
-  document.documentElement.dataset.theme = isTheme(id) ? id : 'classic'
+  const theme = isTheme(id) ? id : 'classic'
+  document.documentElement.dataset.theme = theme
+  if (window.shellApi?.setWindowTheme) window.shellApi.setWindowTheme(theme)
 }
