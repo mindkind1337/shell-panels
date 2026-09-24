@@ -10,10 +10,16 @@ const props = defineProps({
   items: { type: Array, required: true },
   currentId: { type: String, default: null },
   collapsed: { type: Boolean, default: false },
-  width: { type: Number, default: 216 }
+  width: { type: Number, default: 216 },
+  // Panes of the current workspace, shown under the workspaces when set
+  // (Warp theme): [{ id, num, title, kind, agentId, shellId, accent, state,
+  // active }], where
+  // state is 'working' | 'waiting' | 'ready'.
+  sessions: { type: Array, default: null }
 })
 
 const emit = defineEmits([
+  'focus-pane',
   'folder',
   'select',
   'create',
@@ -118,6 +124,12 @@ function initials(name) {
 // Distinct agent kinds in a workspace, for the little logo row.
 function uniqueAgents(list) {
   return [...new Set(list)].slice(0, 4)
+}
+
+const SESSION_STATE = {
+  working: 'Working',
+  waiting: 'Waiting for you',
+  ready: 'Ready'
 }
 
 defineExpose({
@@ -274,6 +286,33 @@ defineExpose({
       </svg>
       <span v-if="!collapsed">New workspace</span>
     </button>
+
+    <div v-if="sessions && !collapsed" class="ws-sessions" aria-label="Sessions">
+      <div class="ws-head">
+        <span class="ws-head-title">Sessions</span>
+        <span class="ws-sessions-count">{{ sessions.length }}</span>
+      </div>
+      <button
+        v-for="s in sessions"
+        :key="s.id"
+        class="ws-session"
+        :class="[s.state, { active: s.active }]"
+        :title="`Go to pane ${s.num || ''}`"
+        @click="emit('focus-pane', s.id)"
+      >
+        <BrandIcon
+          :kind="s.kind === 'agent' ? s.agentId : s.shellId"
+          :accent="s.kind === 'agent' ? s.accent : null"
+          :label="s.kind === 'agent' ? s.title : null"
+          :size="14"
+        />
+        <span class="ws-session-body">
+          <span class="ws-session-name">{{ s.title }}</span>
+          <span class="ws-session-state">{{ SESSION_STATE[s.state] }}</span>
+        </span>
+        <span class="ws-session-num">{{ s.num }}</span>
+      </button>
+    </div>
 
     <div
       class="ws-resize"

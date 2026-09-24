@@ -8,6 +8,7 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import { getBuffer } from '../ptyStore'
 import BrandIcon from './BrandIcon.vue'
 import { settings, fontStack } from '../settings'
+import { terminalTheme } from '../themes'
 
 // Mouse-reporting modes (X10, normal, button, any-event, UTF-8, SGR, urxvt).
 const MOUSE_MODES = [9, 1000, 1002, 1003, 1005, 1006, 1015]
@@ -561,13 +562,7 @@ onMounted(() => {
     scrollback: settings.scrollback,
     allowProposedApi: true,
     windowsPty: windowsPtyOptions(),
-    theme: {
-      background: '#15171c',
-      foreground: '#d6d9df',
-      cursor: '#e8eaee',
-      cursorAccent: '#15171c',
-      selectionBackground: '#2f4a7a'
-    }
+    theme: terminalTheme(settings.theme)
   })
   fit = new FitAddon()
   term.loadAddon(fit)
@@ -670,6 +665,23 @@ onMounted(() => {
       return false
     }
     if (isAppShortcut(e)) return false
+    // xterm leaves a plain Space to the browser's keypress/input events, but
+    // Windows sometimes stops delivering the character (seen after using
+    // dictation): the keydown arrives and nothing follows, so spaces vanish
+    // while letters (handled on keydown) still type. Send it on keydown.
+    if (
+      e.type === 'keydown' &&
+      e.key === ' ' &&
+      e.keyCode === 32 &&
+      !e.ctrlKey &&
+      !e.altKey &&
+      !e.metaKey &&
+      !e.isComposing
+    ) {
+      e.preventDefault()
+      ctx.routeInput(props.node.id, ' ')
+      return false
+    }
     // Ctrl+V pastes (text or image, see onPasteEvent) instead of sending the
     // raw Ctrl+V key: let the browser raise its paste event.
     if (
@@ -735,6 +747,12 @@ watch(isActive, (a) => {
 })
 
 // Live settings. Text metrics changes refit right away.
+watch(
+  () => settings.theme,
+  (theme) => {
+    if (term) term.options.theme = terminalTheme(theme)
+  }
+)
 watch(
   () => [settings.fontSize, settings.fontFamily],
   ([size, family]) => {

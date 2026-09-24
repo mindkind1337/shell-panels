@@ -8,6 +8,7 @@ import LaunchMenu from './components/LaunchMenu.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import UpdateDialog from './components/UpdateDialog.vue'
 import { settings, loadSettings, DEFAULT_SETTINGS } from './settings'
+import { THEMES } from './themes'
 import McpDialog from './components/McpDialog.vue'
 import CommandPalette from './components/CommandPalette.vue'
 import ToolsDialog from './components/ToolsDialog.vue'
@@ -905,6 +906,12 @@ function buildCommands() {
       shortcut: 'Ctrl+Shift+K'
     }
   )
+
+  for (const t of THEMES) {
+    if (t.id !== settings.theme) {
+      add('Theme', `Theme: ${t.label}`, () => (settings.theme = t.id), { hint: t.description })
+    }
+  }
 
   add('Tessel', 'Settings', () => (settingsOpen.value = true), { shortcut: 'Ctrl+,' })
   add('Tessel', 'Keyboard shortcuts and help', () => (helpOpen.value = true), { shortcut: 'F1' })
@@ -1832,6 +1839,49 @@ const workspaceItems = computed(() =>
   })
 )
 
+// Panes of the current workspace with their agent state, for the sidebar's
+// session list. Only the Warp theme shows it.
+const sessionItems = computed(() => {
+  if (settings.theme !== 'warp') return null
+  const items = []
+  forEachLeaf(tree.value, (leaf) => {
+    const isAgent = leaf.kind === 'agent'
+    let state = 'ready'
+    if (isAgent && attention[leaf.id]) state = 'waiting'
+    else if (isAgent && agentStatus[leaf.id] === 'busy') state = 'working'
+    items.push({
+      id: leaf.id,
+      num: leaf.num || 0,
+      title: leaf.title || leaf.shellName || 'Terminal',
+      kind: leaf.kind || 'shell',
+      agentId: leaf.agentId || null,
+      shellId: leaf.shellId || null,
+      accent: leaf.accent || null,
+      state,
+      active: leaf.id === activeId.value
+    })
+  })
+  return items
+})
+
+// Bottom status bar (Warp theme): where typing goes, pane states, folder.
+const statusBar = computed(() => {
+  const items = sessionItems.value
+  if (!items) return null
+  const count = (state) => items.filter((s) => s.state === state).length
+  const parts = [`${items.length} ${items.length === 1 ? 'pane' : 'panes'}`]
+  if (count('working')) parts.push(`${count('working')} working`)
+  if (count('waiting')) parts.push(`${count('waiting')} waiting for you`)
+  const active = items.find((s) => s.active)
+  let target = active ? `Input → ${active.title}` : ''
+  if (broadcast.value) {
+    let n = 0
+    forEachLeaf(tree.value, (leaf) => leaf.broadcast && n++)
+    target = `Broadcast → ${n} ${n === 1 ? 'pane' : 'panes'}`
+  }
+  return { target, summary: parts.join(' · '), path: currentWs.value?.cwd || '' }
+})
+
 function closeMenus() {
   launcher.open = false
   openMenu.value = null
@@ -2404,6 +2454,8 @@ onBeforeUnmount(() => {
         :current-id="currentWsId"
         :collapsed="sidebarCollapsed"
         :width="sidebarWidth"
+        :sessions="sessionItems"
+        @focus-pane="focusPane"
         @select="selectWorkspace"
         @create="createWorkspace"
         @rename="renameWorkspace"
@@ -2431,6 +2483,12 @@ onBeforeUnmount(() => {
         <TaskBoard :agent-panes="agentPanes" :workspace-id="currentWsId" />
       </aside>
     </div>
+
+    <footer v-if="statusBar" class="statusbar">
+      <span class="statusbar-target">{{ statusBar.target }}</span>
+      <span class="statusbar-summary">{{ statusBar.summary }}</span>
+      <span class="statusbar-path" :title="statusBar.path">{{ statusBar.path }}</span>
+    </footer>
 
     <LaunchMenu
       v-if="launcher.open"
