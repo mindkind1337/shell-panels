@@ -31,10 +31,7 @@ import {
 // name the installer uses.
 // TESSEL_USER_DATA overrides it (used for testing without touching your
 // real workspaces).
-app.setPath(
-  'userData',
-  process.env.TESSEL_USER_DATA || join(app.getPath('appData'), 'tessel')
-)
+app.setPath('userData', process.env.TESSEL_USER_DATA || join(app.getPath('appData'), 'tessel'))
 
 // The app was called Shell Panels and kept its data in %APPDATA%\shell-panels.
 // On the first start as Tessel, copy it over so workspaces, settings, tasks and
@@ -671,6 +668,29 @@ ipcMain.handle('agents:refresh', (_evt, custom) => {
 // Clipboard (kept in the main process so it works regardless of renderer
 // focus/permission quirks).
 ipcMain.handle('clipboard:read', () => clipboard.readText())
+ipcMain.handle('clipboard:hasImage', () =>
+  clipboard.availableFormats().some((f) => f.startsWith('image/'))
+)
+// Save the clipboard image as a PNG and return its path, so it can be pasted
+// into an agent as a file (instant, instead of the agent reading the
+// clipboard itself). Files older than a day are removed.
+ipcMain.handle('clipboard:saveImage', () => {
+  const img = clipboard.readImage()
+  if (img.isEmpty()) return null
+  const dir = join(os.tmpdir(), 'tessel-paste')
+  fs.mkdirSync(dir, { recursive: true })
+  const dayAgo = Date.now() - 24 * 60 * 60 * 1000
+  for (const f of fs.readdirSync(dir)) {
+    try {
+      if (fs.statSync(join(dir, f)).mtimeMs < dayAgo) fs.unlinkSync(join(dir, f))
+    } catch {
+      /* in use or gone */
+    }
+  }
+  const file = join(dir, `image-${Date.now()}.png`)
+  fs.writeFileSync(file, img.toPNG())
+  return file
+})
 ipcMain.on('clipboard:write', (_evt, text) => {
   if (typeof text === 'string' && text.length) clipboard.writeText(text)
 })
@@ -1073,9 +1093,7 @@ function ensureDevShortcut() {
   try {
     if (fs.existsSync(electronLnk)) {
       const link = shell.readShortcutLink(electronLnk)
-      const ours = String(link.appUserModelId || '').startsWith(
-        'com.jeanclaudetrottier.tessel'
-      )
+      const ours = String(link.appUserModelId || '').startsWith('com.jeanclaudetrottier.tessel')
       if (ours && link.icon !== icon) {
         write(electronLnk)
         repaired = true

@@ -2506,8 +2506,8 @@ onBeforeUnmount(() => {
           <button class="exit-btn" @click="copyDiagnostics">Copy diagnostics</button>
         </div>
         <p class="help-foot">
-          Drop files on a pane to paste their paths. Select text to copy it. Right-click a pane for
-          more.
+          Drop files on a pane to paste their paths. Select text to copy it, right-click to paste.
+          Shift+right-click a pane for more.
         </p>
       </div>
     </div>

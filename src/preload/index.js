@@ -46,6 +46,8 @@ const api = {
   },
 
   readClipboard: () => ipcRenderer.invoke('clipboard:read'),
+  clipboardHasImage: () => ipcRenderer.invoke('clipboard:hasImage'),
+  saveClipboardImage: () => ipcRenderer.invoke('clipboard:saveImage'),
   writeClipboard: (text) => ipcRenderer.send('clipboard:write', text),
 
   // Workspace layout persistence.

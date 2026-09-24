@@ -8,6 +8,9 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import { getBuffer } from '../ptyStore'
 import BrandIcon from './BrandIcon.vue'
 import { settings, fontStack } from '../settings'
+
+// Mouse-reporting modes (X10, normal, button, any-event, UTF-8, SGR, urxvt).
+const MOUSE_MODES = [9, 1000, 1002, 1003, 1005, 1006, 1015]
 import { registerPane, unregisterPane, getPane } from '../paneRegistry'
 import { setAgentStatus, setAttention, clearAttention, attention } from '../agentStatus'
 
@@ -264,8 +267,81 @@ function copySelection() {
 
 async function pasteClipboard() {
   const text = await window.shellApi.readClipboard()
-  if (text) ctx.routeInput(props.node.id, text)
+  if (text) requestPaste(text)
+  else if (window.shellApi.clipboardHasImage && (await window.shellApi.clipboardHasImage()))
+    pasteImage()
+}
+
+// An image can't be typed into a terminal. Claude Code attaches an image
+// whose file path is pasted, so we save the clipboard image and paste its
+// path: instant, where Claude's own Alt+V takes seconds on Windows (it starts
+// PowerShell to read the clipboard). Other programs read the clipboard
+// themselves on Ctrl+V (Codex does it quickly).
+async function pasteImage() {
+  if (props.node.agentId === 'claude') {
+    let file = null
+    try {
+      file = await window.shellApi.saveClipboardImage()
+    } catch {
+      /* fall back to Claude's own key */
+    }
+    if (file && term) term.paste(file)
+    else window.shellApi.writePty(props.node.id, '\x1bv')
+  } else {
+    window.shellApi.writePty(props.node.id, '\x16')
+  }
   if (term) term.focus()
+}
+
+// Pasting goes through xterm's paste(), which wraps the text as a bracketed
+// paste when the program supports it (so several lines arrive as one block
+// instead of running line by line) and sends it to the pane (or to every pane
+// in broadcast). Text with line breaks waits for a confirmation first, so an
+// accidental right-click can't run a pile of commands.
+const pasteAsk = ref(null) // { text, lines, preview, more }
+const pasteAskEl = ref(null)
+const PREVIEW_LINES = 500
+
+function requestPaste(text) {
+  if (!text || !term) return
+  if (settings.confirmMultilinePaste && /[\r\n]/.test(text)) {
+    const all = text.replace(/\r\n?/g, '\n').replace(/\n+$/, '').split('\n')
+    pasteAsk.value = {
+      text,
+      lines: all.length,
+      preview: all.slice(0, PREVIEW_LINES).join('\n'),
+      more: Math.max(0, all.length - PREVIEW_LINES)
+    }
+    nextTick(() => pasteAskEl.value && pasteAskEl.value.focus())
+    return
+  }
+  term.paste(text)
+  term.focus()
+}
+
+function confirmPaste() {
+  const ask = pasteAsk.value
+  pasteAsk.value = null
+  if (ask && term) term.paste(ask.text)
+  if (term) term.focus()
+}
+
+function cancelPaste() {
+  pasteAsk.value = null
+  if (term) term.focus()
+}
+
+// Ctrl+V: the browser pastes into xterm's hidden text box. Catch it first so
+// it gets the same confirmation.
+function onPasteEvent(e) {
+  if (!e.target || !e.target.classList || !e.target.classList.contains('xterm-helper-textarea'))
+    return
+  e.preventDefault()
+  e.stopPropagation()
+  const data = e.clipboardData
+  const text = data ? data.getData('text/plain') : ''
+  if (text) requestPaste(text)
+  else if (data && [...data.items].some((i) => i.type.startsWith('image/'))) pasteImage()
 }
 
 // Editable pane title — stored on the node so it survives layout changes and
@@ -305,6 +381,20 @@ const ctxMenuEl = ref(null)
 
 async function onContextMenu(e) {
   e.preventDefault()
+  // Right-click pastes, like PuTTY and Linux terminals: select text, then
+  // right-click to paste it at the prompt. Shift+right-click (or the ⋯
+  // button) opens the menu.
+  if (settings.rightClickPaste && !e.shiftKey) {
+    const sel = term ? term.getSelection() : ''
+    if (sel) {
+      window.shellApi.writeClipboard(sel)
+      term.clearSelection()
+      requestPaste(sel)
+    } else {
+      pasteClipboard()
+    }
+    return
+  }
   otherPanes.value = ctx.otherPanes(props.node.id)
   const sel = term ? term.getSelection() : ''
   ctxMenu.hasSelection = sel.length > 0
@@ -505,6 +595,16 @@ onMounted(() => {
 
   search = new SearchAddon()
   term.loadAddon(search)
+  // "Always select with the mouse": some programs (GitHub Copilot CLI, htop,
+  // vim with mouse on) ask the terminal to send them clicks, and then dragging
+  // no longer selects text unless you hold Shift. With the setting on, those
+  // requests are ignored. (Only requests that set nothing but mouse modes, so
+  // other modes in the same sequence still apply.)
+  term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, (params) => {
+    if (!settings.alwaysSelect) return false
+    const modes = params.map((p) => (Array.isArray(p) ? p[0] : p))
+    return modes.length > 0 && modes.every((m) => MOUSE_MODES.includes(m))
+  })
   search.onDidChangeResults(({ resultIndex, resultCount }) => {
     findResult.index = resultIndex
     findResult.count = resultCount
@@ -570,6 +670,16 @@ onMounted(() => {
       return false
     }
     if (isAppShortcut(e)) return false
+    // Ctrl+V pastes (text or image, see onPasteEvent) instead of sending the
+    // raw Ctrl+V key: let the browser raise its paste event.
+    if (
+      e.type === 'keydown' &&
+      e.ctrlKey &&
+      !e.shiftKey &&
+      !e.altKey &&
+      e.key.toLowerCase() === 'v'
+    )
+      return false
     if (e.type === 'keydown' && e.ctrlKey && e.shiftKey) {
       const k = e.key.toLowerCase()
       if (k === 'c') {
@@ -643,6 +753,14 @@ watch(
   }
 )
 
+// Turning it on also releases a mouse a program already took.
+watch(
+  () => settings.alwaysSelect,
+  (on) => {
+    if (on && term) term.write(MOUSE_MODES.map((m) => `\x1b[?${m}l`).join(''))
+  }
+)
+
 watch(isMaximized, () => {
   nextTick(() => scheduleFit())
 })
@@ -681,6 +799,7 @@ onBeforeUnmount(() => {
     :data-pane-id="node.id"
     @mousedown="focusTerm"
     @contextmenu="onContextMenu"
+    @paste.capture="onPasteEvent"
     @dragover="onDragOver"
     @dragleave="onDragLeave"
     @drop="onDrop"
@@ -1002,6 +1121,31 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-if="dropping" class="drop-hint">Drop to paste the file path</div>
+
+    <div
+      v-if="pasteAsk"
+      ref="pasteAskEl"
+      class="paste-ask"
+      tabindex="-1"
+      role="dialog"
+      aria-label="Confirm paste"
+      @mousedown.stop
+      @contextmenu.stop.prevent
+      @keydown.enter.prevent.stop="confirmPaste"
+      @keydown.escape.prevent.stop="cancelPaste"
+    >
+      <div class="paste-ask-title">
+        Paste {{ pasteAsk.lines }} {{ pasteAsk.lines === 1 ? 'line' : 'lines' }}?
+      </div>
+      <pre class="paste-ask-preview">{{ pasteAsk.preview }}</pre>
+      <div v-if="pasteAsk.more" class="paste-ask-more">
+        and {{ pasteAsk.more }} more {{ pasteAsk.more === 1 ? 'line' : 'lines' }}
+      </div>
+      <div class="paste-ask-actions">
+        <button class="exit-btn" @click="cancelPaste">Cancel <kbd>Esc</kbd></button>
+        <button class="exit-btn primary" @click="confirmPaste">Paste <kbd>Enter</kbd></button>
+      </div>
+    </div>
   </div>
 
   <Teleport to="body">

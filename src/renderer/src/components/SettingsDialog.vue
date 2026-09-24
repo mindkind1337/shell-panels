@@ -170,6 +170,32 @@ const CURSORS = [
           <input v-model="settings.copyOnSelect" type="checkbox" class="set-switch" />
         </label>
         <label class="set-row">
+          <div class="set-label">
+            Right-click pastes
+            <span class="set-hint"
+              >Pastes the selection, or the clipboard. Shift+right-click opens the menu</span
+            >
+          </div>
+          <input v-model="settings.rightClickPaste" type="checkbox" class="set-switch" />
+        </label>
+        <label class="set-row">
+          <div class="set-label">
+            Ask before pasting several lines
+            <span class="set-hint">So an accidental paste can't run commands</span>
+          </div>
+          <input v-model="settings.confirmMultilinePaste" type="checkbox" class="set-switch" />
+        </label>
+        <label class="set-row">
+          <div class="set-label">
+            Always select with the mouse
+            <span class="set-hint"
+              >Even in programs that use the mouse (GitHub Copilot, htop). They no longer get clicks
+              or the wheel. Otherwise, hold Shift to select</span
+            >
+          </div>
+          <input v-model="settings.alwaysSelect" type="checkbox" class="set-switch" />
+        </label>
+        <label class="set-row">
           <div class="set-label">Ask before closing an agent pane</div>
           <input v-model="settings.confirmCloseAgent" type="checkbox" class="set-switch" />
         </label>
