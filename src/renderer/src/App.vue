@@ -15,7 +15,7 @@ import ToolsDialog from './components/ToolsDialog.vue'
 import SessionsDialog from './components/SessionsDialog.vue'
 import { getPane } from './paneRegistry'
 import { chainCommands } from './shellChain'
-import { agentStatus, attention, clearAgentStatus, clearAttention } from './agentStatus'
+import { agentStatus, attention, limits, clearAgentStatus, clearAttention } from './agentStatus'
 import { dropBuffer, seedBuffer } from './ptyStore'
 import { tasks as boardTasks, setTasks, updateTask, removeTask } from './taskBoardStore'
 
@@ -823,6 +823,7 @@ provide('panelCtx', {
   toggleMaximize,
   fontSize,
   notifyAgentDone,
+  notifyAgentLimit,
   openLauncherAt,
   beginPaneDrag,
   otherPanes,
@@ -2083,14 +2084,57 @@ function messageTeam(teamId, text) {
     showToast(`${team.name} has no agent to message.`, { kind: 'error' })
     return
   }
-  for (const leaf of agents) deliverToAgent(leaf.id, `[Message to team ${team.name}] ${body}`)
-  const held = agents.filter((l) => pendingMessages[l.id])
-  showToast(
-    held.length
-      ? `Sent to ${agents.length - held.length} of ${agents.length} agents. ${held.map((l) => l.title).join(', ')} ${held.length === 1 ? 'is' : 'are'} waiting for your approval and will get it right after.`
-      : `Sent to ${agents.length} ${agents.length === 1 ? 'agent' : 'agents'} of ${team.name}.`,
-    { timeout: 4000 }
-  )
+  // Agents out of usage would not act on it: skip them and say so.
+  const limited = agents.filter((l) => limits[l.id])
+  const reached = agents.filter((l) => !limits[l.id])
+  for (const leaf of reached) deliverToAgent(leaf.id, `[Message to team ${team.name}] ${body}`)
+  const held = reached.filter((l) => pendingMessages[l.id])
+  const names = (list) => list.map((l) => l.title).join(', ')
+  const parts = [`Sent to ${reached.length - held.length} of ${agents.length} agents of ${team.name}.`]
+  if (held.length) {
+    parts.push(
+      `${names(held)} ${held.length === 1 ? 'is' : 'are'} waiting for your approval and will get it right after.`
+    )
+  }
+  if (limited.length) {
+    parts.push(
+      `Skipped ${limited.map((l) => `${l.title}${limitWhen(l.id)}`).join(', ')}: usage limit reached.`
+    )
+  }
+  showToast(parts.join(' '), {
+    kind: limited.length ? 'attention' : undefined,
+    timeout: limited.length ? 8000 : 4000
+  })
+}
+
+// " (resets 8:47 PM)" for an agent at its usage limit, else ''.
+function limitWhen(leafId) {
+  const reset = limits[leafId] && limits[leafId].reset
+  if (!reset) return ''
+  return /^in /.test(reset) ? ` (resets ${reset})` : ` (resets at ${reset})`
+}
+
+// An agent just stopped because it hit its usage limit.
+function notifyAgentLimit(node, hit) {
+  const ws = wsOfLeaf(node.id)
+  const team = teamById(node.team)
+  const when = limitWhen(node.id) || (hit && hit.reset ? ` (resets ${hit.reset})` : '')
+  const others = team ? teamAgents(team.id).filter((l) => l.id !== node.id && !limits[l.id]) : []
+  const handOver = others.length ? ` ${others.map((l) => l.title).join(', ')} in ${team.name} can take over.` : ''
+  const text = `${node.title} hit its usage limit${when}.${handOver}`
+  if (document.hasFocus()) {
+    showToast(text, {
+      kind: 'attention',
+      timeout: 10000,
+      action: { label: 'Show', run: () => focusPane(node.id) }
+    })
+  } else if (window.shellApi.notify && settings.desktopNotifications) {
+    window.shellApi.notify({
+      title: `${node.title} hit its usage limit`,
+      body: `${when.trim()}${ws ? ` Workspace: ${ws.name}.` : ''}${handOver}`.trim(),
+      paneId: node.id
+    })
+  }
 }
 
 function slugify(name) {
@@ -2169,6 +2213,7 @@ async function briefTeam(teamId) {
     return
   }
   for (const leaf of agents) {
+    if (limits[leaf.id]) continue // out of usage: it would not act on it
     const mates = teamRoster(teamId, leaf.id)
     deliverToAgent(
       leaf.id,
@@ -2179,9 +2224,15 @@ async function briefTeam(teamId) {
         'Before editing a file another agent may be editing, check the notes. Do not commit that file.'
     )
   }
-  showToast(`Briefed ${agents.length} ${agents.length === 1 ? 'agent' : 'agents'}. Notes: ${res.path}`, {
-    timeout: 5000
-  })
+  const limited = agents.filter((l) => limits[l.id])
+  const briefed = agents.length - limited.length
+  showToast(
+    `Briefed ${briefed} ${briefed === 1 ? 'agent' : 'agents'}. Notes: ${res.path}` +
+      (limited.length
+        ? ` Skipped ${limited.map((l) => `${l.title}${limitWhen(l.id)}`).join(', ')}: usage limit reached.`
+        : ''),
+    { timeout: limited.length ? 8000 : 5000 }
+  )
 }
 
 // Open the sidebar's message box under a team.
@@ -2190,9 +2241,11 @@ function startTeamMessage(teamId) {
   nextTick(() => sidebarEl.value && sidebarEl.value.startTeamMessage(teamId))
 }
 
-// A pane's agent state for the sidebar: 'working' | 'waiting' | 'ready'.
+// A pane's agent state for the sidebar:
+// 'limited' (usage limit reached) | 'working' | 'waiting' | 'ready'.
 function paneState(leaf) {
   if (leaf.kind !== 'agent') return 'ready'
+  if (limits[leaf.id]) return 'limited'
   if (attention[leaf.id]) return 'waiting'
   return agentStatus[leaf.id] === 'busy' ? 'working' : 'ready'
 }
@@ -2216,6 +2269,7 @@ const teamItems = computed(() =>
         where: ws ? ws.name : '',
         here: !!ws && ws.id === currentWsId.value,
         state: paneState(leaf),
+        reset: limits[leaf.id] ? limits[leaf.id].reset : '',
         held: !!pendingMessages[leaf.id]
       }
     })
@@ -2239,6 +2293,7 @@ const sessionItems = computed(() => {
       accent: leaf.accent || null,
       team: teamById(leaf.team),
       state,
+      reset: limits[leaf.id] ? limits[leaf.id].reset : '',
       active: leaf.id === activeId.value
     })
   })

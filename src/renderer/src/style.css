@@ -3788,3 +3788,19 @@ body.pane-dragging * {
   opacity: 0.5;
   cursor: default;
 }
+
+/* An agent that hit its usage limit (see agentLimit.js). */
+.pane-limit {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--danger) 20%, transparent);
+  color: #ffb4b6;
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.ws-team-member.limited .ws-team-member-where,
+.ws-session.limited .ws-session-state {
+  color: #ffb4b6;
+}

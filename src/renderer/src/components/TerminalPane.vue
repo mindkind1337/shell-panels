@@ -13,7 +13,16 @@ import { terminalTheme } from '../themes'
 // Mouse-reporting modes (X10, normal, button, any-event, UTF-8, SGR, urxvt).
 const MOUSE_MODES = [9, 1000, 1002, 1003, 1005, 1006, 1015]
 import { registerPane, unregisterPane, getPane } from '../paneRegistry'
-import { setAgentStatus, setAttention, clearAttention, attention } from '../agentStatus'
+import {
+  setAgentStatus,
+  setAttention,
+  clearAttention,
+  attention,
+  limits,
+  setLimit,
+  clearLimit
+} from '../agentStatus'
+import { detectLimit } from '../agentLimit'
 
 const props = defineProps({
   node: { type: Object, required: true }
@@ -54,6 +63,16 @@ function markActivity() {
   statusTimer = setTimeout(() => {
     agentStatus.value = 'idle'
     const worked = Date.now() - busySince - IDLE_AFTER_MS
+    // Stopped because it hit its usage limit? Say so instead of "finished".
+    const hit = detectLimit(screenText(12))
+    if (hit) {
+      const isNew = !limits[props.node.id]
+      setLimit(props.node.id, hit)
+      if (isNew) ctx.notifyAgentLimit(props.node, hit)
+      return
+    }
+    // Working again for real: whatever limit it had is over.
+    if (worked >= ATTENTION_AFTER_MS) clearLimit(props.node.id)
     const lookingHere = isActive.value && document.hasFocus()
     if (worked >= ATTENTION_AFTER_MS && !lookingHere) {
       setAttention(props.node.id)
@@ -62,7 +81,22 @@ function markActivity() {
   }, IDLE_AFTER_MS)
 }
 
+// The last `lines` non-empty rows on screen as plain text (a tall pane can
+// have its content at the top and blank rows below).
+function screenText(lines = 20) {
+  if (!term) return ''
+  const buf = term.buffer.active
+  const out = []
+  for (let y = buf.baseY + term.rows - 1; y >= buf.baseY && out.length < lines; y--) {
+    const line = buf.getLine(y)
+    const text = line ? line.translateToString(true) : ''
+    if (text.trim()) out.unshift(text)
+  }
+  return out.join('\n')
+}
+
 const needsYou = computed(() => !!attention[props.node.id])
+const limit = computed(() => limits[props.node.id] || null)
 
 // The team this pane belongs to (agents working together), if any.
 const team = computed(() => ctx.teamById(props.node.team))
@@ -757,19 +791,7 @@ onMounted(() => {
     paste: pasteText,
     submit: () => window.shellApi.writePty(props.node.id, '\r'),
     getSelection: () => (term ? term.getSelection() : ''),
-    // The last `lines` non-empty rows on screen as plain text (a tall pane can
-    // have its content at the top and blank rows below).
-    screenText: (lines = 20) => {
-      if (!term) return ''
-      const buf = term.buffer.active
-      const out = []
-      for (let y = buf.baseY + term.rows - 1; y >= buf.baseY && out.length < lines; y--) {
-        const line = buf.getLine(y)
-        const text = line ? line.translateToString(true) : ''
-        if (text.trim()) out.unshift(text)
-      }
-      return out.join('\n')
-    }
+    screenText
   }
   registerPane(props.node.id, paneApi)
 
@@ -930,7 +952,17 @@ onBeforeUnmount(() => {
           :title="`Team: ${team.name}. Manage it under Teams in the sidebar or in the ⋯ menu.`"
           >{{ team.name }}</span
         >
-        <span v-if="isAgent && agentStatus === 'busy'" class="pane-working">working</span>
+        <span
+          v-if="isAgent && limit"
+          class="pane-limit"
+          :title="
+            limit.reset
+              ? `This agent hit its usage limit. It resets ${/^in /.test(limit.reset) ? '' : 'at '}${limit.reset}.`
+              : 'This agent hit its usage limit.'
+          "
+          >limit{{ limit.reset ? ` · ${limit.reset}` : '' }}</span
+        >
+        <span v-else-if="isAgent && agentStatus === 'busy'" class="pane-working">working</span>
         <span v-else-if="needsYou" class="pane-needs-you">needs you</span>
         <span v-if="exited" class="exit-tag">exited</span>
       </div>

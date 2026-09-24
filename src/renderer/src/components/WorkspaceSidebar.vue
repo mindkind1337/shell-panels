@@ -136,9 +136,16 @@ function uniqueAgents(list) {
 }
 
 const SESSION_STATE = {
+  limited: 'Usage limit',
   working: 'Working',
   waiting: 'Waiting for you',
   ready: 'Ready'
+}
+
+// "Usage limit · 8:47 PM" for an agent out of usage, else its plain state.
+function stateText(item) {
+  if (item.state === 'limited' && item.reset) return `Usage limit · ${item.reset}`
+  return SESSION_STATE[item.state]
 }
 
 // --- Teams: rename in place ---------------------------------------------------
@@ -460,7 +467,11 @@ defineExpose({
           />
           <span class="ws-team-member-name">{{ m.title }}</span>
           <span class="ws-team-member-where">{{
-            m.held ? 'Message waits for your approval' : m.here ? SESSION_STATE[m.state] : m.where
+            m.held
+              ? 'Message waits for your approval'
+              : m.state === 'limited' || m.here
+                ? stateText(m)
+                : m.where
           }}</span>
         </button>
         <div v-if="messagingTeamId === t.id" class="ws-team-message">
@@ -507,7 +518,7 @@ defineExpose({
         />
         <span class="ws-session-body">
           <span class="ws-session-name">{{ s.title }}</span>
-          <span class="ws-session-state">{{ SESSION_STATE[s.state] }}</span>
+          <span class="ws-session-state">{{ stateText(s) }}</span>
         </span>
         <span
           v-if="s.team"
