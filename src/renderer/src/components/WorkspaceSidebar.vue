@@ -14,7 +14,10 @@ const props = defineProps({
   width: { type: Number, default: 216 },
   // "Needs you": [{ paneId, title, agentId, accent, kind: 'approval' | 'done'
   //   | 'limited', text }]
-  inbox: { type: Array, default: () => [] }
+  inbox: { type: Array, default: () => [] },
+  // Every pane of the current workspace, for "Sessions": [{ id, num, title,
+  //   kind, agentId, shellId, accent, state, reset, held, active }]
+  sessions: { type: Array, default: () => [] }
 })
 
 const emit = defineEmits([
@@ -136,6 +139,7 @@ const STATE_TEXT = {
 }
 
 function stateText(m) {
+  if (m.kind && m.kind !== 'agent') return 'Terminal'
   if (m.held) return 'Message waits for your approval'
   if (m.state === 'limited' && m.reset) return `Usage limit · ${m.reset}`
   return STATE_TEXT[m.state]
@@ -335,57 +339,6 @@ defineExpose({
           </template>
         </div>
 
-        <!-- The current workspace lists its agents and what they are doing. -->
-        <div
-          v-if="!collapsed && item.id === currentId && item.members.length"
-          class="ws-agents"
-        >
-          <button
-            v-for="m in item.members"
-            :key="m.id"
-            class="ws-agent"
-            :class="[m.state, { active: m.active }]"
-            :title="`Go to pane ${m.num || ''}`"
-            @click="emit('focus-pane', m.id)"
-          >
-            <BrandIcon :kind="m.agentId" :accent="m.accent" :label="m.title" :size="14" />
-            <span class="ws-agent-name">{{ m.title }}</span>
-            <span class="ws-agent-state">{{ stateText(m) }}</span>
-          </button>
-          <div class="ws-agents-actions">
-            <button
-              class="ws-agents-btn"
-              :class="{ on: messagingId === item.id }"
-              title="One message, sent to each agent of this workspace"
-              @click="startMessage(item.id)"
-            >
-              Message all
-            </button>
-            <button
-              class="ws-agents-btn"
-              title="A shared notes file for the agents of this workspace"
-              @click="emit('notes-ws', item.id)"
-            >
-              Project notes
-            </button>
-          </div>
-          <div v-if="messagingId === item.id" class="ws-message">
-            <textarea
-              :ref="(el) => (messageEls[item.id] = el)"
-              v-model="messageDraft"
-              rows="3"
-              :placeholder="`Message every agent of ${item.name}… (Enter to send, Shift+Enter for a new line)`"
-              @keydown.enter.exact.prevent="sendMessage"
-              @keydown.escape.prevent.stop="messagingId = null"
-            ></textarea>
-            <div class="ws-message-actions">
-              <button class="ws-message-cancel" @click="messagingId = null">Cancel</button>
-              <button class="ws-message-send" :disabled="!messageDraft.trim()" @click="sendMessage">
-                Send
-              </button>
-            </div>
-          </div>
-        </div>
       </template>
     </div>
 
@@ -395,6 +348,67 @@ defineExpose({
       </svg>
       <span v-if="!collapsed">New workspace</span>
     </button>
+
+    <!-- The current workspace's panes: agents and shells, with their state. -->
+    <section v-if="!collapsed && sessions.length" class="ws-sessions" aria-label="Sessions">
+      <div class="ws-head">
+        <span class="ws-head-title">Sessions</span>
+        <span class="ws-sessions-count">{{ sessions.length }}</span>
+      </div>
+      <button
+        v-for="s in sessions"
+        :key="s.id"
+        class="ws-session"
+        :class="[s.state, { active: s.active }]"
+        :title="`Go to pane ${s.num || ''}`"
+        @click="emit('focus-pane', s.id)"
+      >
+        <BrandIcon
+          :kind="s.kind === 'agent' ? s.agentId : s.shellId"
+          :accent="s.kind === 'agent' ? s.accent : null"
+          :label="s.kind === 'agent' ? s.title : null"
+          :size="14"
+        />
+        <span class="ws-session-body">
+          <span class="ws-session-name">{{ s.title }}</span>
+          <span class="ws-session-state">{{ stateText(s) }}</span>
+        </span>
+        <span class="ws-session-num">{{ s.num }}</span>
+      </button>
+      <div v-if="sessions.some((s) => s.kind === 'agent')" class="ws-agents-actions">
+        <button
+          class="ws-agents-btn"
+          :class="{ on: messagingId === currentId }"
+          title="One message, sent to each agent of this workspace (never to plain shells)"
+          @click="startMessage(currentId)"
+        >
+          Message all
+        </button>
+        <button
+          class="ws-agents-btn"
+          title="A shared notes file for the agents of this workspace"
+          @click="emit('notes-ws', currentId)"
+        >
+          Project notes
+        </button>
+      </div>
+      <div v-if="messagingId === currentId" class="ws-message">
+        <textarea
+          :ref="(el) => (messageEls[currentId] = el)"
+          v-model="messageDraft"
+          rows="3"
+          placeholder="Message every agent of this workspace… (Enter to send, Shift+Enter for a new line)"
+          @keydown.enter.exact.prevent="sendMessage"
+          @keydown.escape.prevent.stop="messagingId = null"
+        ></textarea>
+        <div class="ws-message-actions">
+          <button class="ws-message-cancel" @click="messagingId = null">Cancel</button>
+          <button class="ws-message-send" :disabled="!messageDraft.trim()" @click="sendMessage">
+            Send
+          </button>
+        </div>
+      </div>
+    </section>
 
     <div
       class="ws-resize"

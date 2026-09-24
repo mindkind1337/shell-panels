@@ -2136,7 +2136,6 @@ function paneState(leaf) {
 // Panes of the current workspace with their agent state, for the sidebar's
 // session list. Only the Warp theme shows it.
 const sessionItems = computed(() => {
-  if (settings.theme !== 'warp') return null
   const items = []
   forEachLeaf(tree.value, (leaf) => {
     const state = paneState(leaf)
@@ -2150,6 +2149,7 @@ const sessionItems = computed(() => {
       accent: leaf.accent || null,
       state,
       reset: limits[leaf.id] ? limits[leaf.id].reset : '',
+      held: !!pendingMessages[leaf.id],
       active: leaf.id === activeId.value
     })
   })
@@ -2158,8 +2158,8 @@ const sessionItems = computed(() => {
 
 // Bottom status bar (Warp theme): where typing goes, pane states, folder.
 const statusBar = computed(() => {
+  if (settings.theme !== 'warp') return null
   const items = sessionItems.value
-  if (!items) return null
   const count = (state) => items.filter((s) => s.state === state).length
   const parts = [`${items.length} ${items.length === 1 ? 'pane' : 'panes'}`]
   if (count('working')) parts.push(`${count('working')} working`)
@@ -2747,6 +2747,7 @@ onBeforeUnmount(() => {
         :collapsed="sidebarCollapsed"
         :width="sidebarWidth"
         :inbox="inboxItems"
+        :sessions="sessionItems"
         @focus-pane="focusPane"
         @message-ws="messageWorkspace"
         @notes-ws="shareProjectNotes"
