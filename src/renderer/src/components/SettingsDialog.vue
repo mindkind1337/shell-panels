@@ -4,6 +4,7 @@
 import { ref, onMounted } from 'vue'
 import BrandIcon from './BrandIcon.vue'
 import { settings, FONT_FAMILIES, resetSettings, clamp } from '../settings'
+import { THEMES } from '../themes'
 
 defineProps({
   shells: { type: Array, default: () => [] },
@@ -85,6 +86,21 @@ const CURSORS = [
           </svg>
         </button>
       </div>
+
+      <section class="set-section">
+        <h3>Appearance</h3>
+        <div class="set-row">
+          <label class="set-label" for="appearance-theme">
+            Theme
+            <span class="set-hint">Applies immediately. Your sessions keep running.</span>
+          </label>
+          <select id="appearance-theme" v-model="settings.theme" class="set-select">
+            <option v-for="theme in THEMES" :key="theme.id" :value="theme.id">
+              {{ theme.label }}
+            </option>
+          </select>
+        </div>
+      </section>
 
       <section class="set-section">
         <h3>Text</h3>

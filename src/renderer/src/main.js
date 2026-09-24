@@ -1,11 +1,17 @@
-import { createApp } from 'vue'
+import { createApp, watch } from 'vue'
 import App from './App.vue'
 import '@xterm/xterm/css/xterm.css'
 import './style.css'
+import './themes.css'
+import { settings } from './settings'
+import { applyTheme } from './themes'
 import { startCapture } from './ptyStore'
 
 // Begin buffering PTY output before any pane mounts so nothing is lost.
 startCapture()
+
+// Root-level styling also reaches dialogs rendered outside the main app tree.
+watch(() => settings.theme, applyTheme, { immediate: true, flush: 'sync' })
 
 // Send interface errors to the app log (%APPDATA%\\tessel\\logs).
 function report(level, value) {

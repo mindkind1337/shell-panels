@@ -1,6 +1,7 @@
 // User preferences. One reactive object shared by the settings dialog, App and
 // every TerminalPane; App persists it with the workspace layout.
 import { reactive } from 'vue'
+import { isTheme } from './themes'
 
 export const FONT_FAMILIES = [
   'Cascadia Mono',
@@ -12,6 +13,7 @@ export const FONT_FAMILIES = [
 ]
 
 export const DEFAULT_SETTINGS = Object.freeze({
+  theme: 'classic',
   fontSize: 13,
   fontFamily: 'Cascadia Mono',
   cursorStyle: 'block', // 'block' | 'bar' | 'underline'
@@ -52,6 +54,7 @@ export function loadSettings(saved) {
       continue
     }
     if (typeof v !== typeof def) continue
+    if (key === 'theme' && !isTheme(v)) continue
     if (key === 'cursorStyle' && !['block', 'bar', 'underline'].includes(v)) continue
     settings[key] = v
   }
