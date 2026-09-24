@@ -23,6 +23,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   confirmCloseAgent: true,
   restoreWorkspaces: true,
   resumeAgents: true,
+  // Draw terminals with the graphics card (WebGL). Off = plain renderer.
+  gpuRendering: true,
   // Windows input method tip for voice typing ('' = whatever is active).
   voiceTip: '',
   // true once you pick a voice language yourself (then we never override it).

@@ -7,14 +7,14 @@
   "license": "MIT",
   "scripts": {
     "dev": "node launch.mjs dev",
-    "build": "electron-vite build",
+    "build": "electron-vite build && node scripts/check-bundle.mjs",
     "preview": "node launch.mjs preview",
     "start": "node launch.mjs preview",
     "lint": "eslint . --fix",
     "format": "prettier --write .",
     "test": "vitest run",
-    "dist": "electron-vite build && electron-builder --win --x64",
-    "dist:dir": "electron-vite build && electron-builder --win --x64 --dir"
+    "dist": "npm run build && electron-builder --win --x64",
+    "dist:dir": "npm run build && electron-builder --win --x64 --dir"
   },
   "dependencies": {
     "node-pty": "^1.1.0"
@@ -25,7 +25,10 @@
     "@vue/test-utils": "^2.4.11",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-search": "^0.15.0",
+    "@xterm/addon-serialize": "^0.13.0",
     "@xterm/addon-web-links": "^0.11.0",
+    "@xterm/addon-webgl": "^0.18.0",
+    "@xterm/headless": "^5.5.0",
     "@xterm/xterm": "^5.5.0",
     "electron": "^42.4.0",
     "electron-builder": "^26.15.3",

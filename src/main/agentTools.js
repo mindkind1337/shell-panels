@@ -2,6 +2,7 @@
 // own copy of the repo on its own branch) and MCP server management for Claude
 // Code and Codex. The pure helpers are exported for unit tests.
 import { execFile, spawn } from 'child_process'
+import { cleanEnv } from './cleanEnv'
 import { join, dirname, basename } from 'path'
 import os from 'os'
 import fs from 'fs'
@@ -145,7 +146,13 @@ function run(file, args, opts = {}) {
     execFile(
       file,
       args,
-      { windowsHide: true, maxBuffer: 8 * 1024 * 1024, timeout: opts.timeout || 60000, ...opts },
+      {
+        windowsHide: true,
+        maxBuffer: 8 * 1024 * 1024,
+        timeout: opts.timeout || 60000,
+        env: cleanEnv(process.env),
+        ...opts
+      },
       (err, stdout, stderr) => {
         resolve({
           ok: !err,
@@ -199,6 +206,53 @@ export async function gitInfo(cwd) {
   const br = await run('git', ['-C', root, 'rev-parse', '--abbrev-ref', 'HEAD'])
   const head = await run('git', ['-C', root, 'rev-parse', '--verify', 'HEAD'])
   return { isRepo: true, root, branch: br.ok ? br.stdout.trim() : null, hasCommits: head.ok }
+}
+
+// Parse `git status --porcelain=v1 --branch` into what a pane header shows:
+//   ## main...origin/main [ahead 2, behind 1]
+//    M src/a.js
+//   ?? new.txt
+// -> { branch: 'main', ahead: 2, behind: 1, changed: 2 }
+export function parseGitStatus(text) {
+  const lines = String(text || '')
+    .split(/\r?\n/)
+    .filter(Boolean)
+  let branch = null
+  let ahead = 0
+  let behind = 0
+  let changed = 0
+  for (const line of lines) {
+    if (!line.startsWith('## ')) {
+      changed++
+      continue
+    }
+    const head = line.slice(3)
+    const initial = /^No commits yet on (.+)$/.exec(head)
+    if (initial) {
+      branch = initial[1]
+      continue
+    }
+    if (/^HEAD \(no branch\)/.test(head)) {
+      branch = 'detached'
+      continue
+    }
+    branch = head.split(/\.\.\.|\s/)[0] || null
+    const a = /ahead (\d+)/.exec(head)
+    const b = /behind (\d+)/.exec(head)
+    if (a) ahead = Number(a[1])
+    if (b) behind = Number(b[1])
+  }
+  return { branch, ahead, behind, changed }
+}
+
+// Branch and working-tree state of the repo containing `cwd`, for pane headers.
+export async function gitStatus(cwd) {
+  if (!cwd || !fs.existsSync(cwd)) return { isRepo: false }
+  const res = await run('git', ['-C', cwd, 'status', '--porcelain=v1', '--branch'], {
+    timeout: 8000
+  })
+  if (!res.ok) return { isRepo: false }
+  return { isRepo: true, ...parseGitStatus(res.stdout) }
 }
 
 // Create <repo>.worktrees/<name> on a new branch agent/<name> from HEAD.

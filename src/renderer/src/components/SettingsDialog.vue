@@ -100,6 +100,15 @@ const CURSORS = [
           </div>
         </div>
         <label class="set-row">
+          <div class="set-label">
+            Use the graphics card to draw terminals
+            <span class="set-hint"
+              >Faster with busy agents. Turn off if text looks wrong. Applies to new panes</span
+            >
+          </div>
+          <input v-model="settings.gpuRendering" type="checkbox" class="set-switch" />
+        </label>
+        <label class="set-row">
           <div class="set-label">Blinking cursor</div>
           <input v-model="settings.cursorBlink" type="checkbox" class="set-switch" />
         </label>

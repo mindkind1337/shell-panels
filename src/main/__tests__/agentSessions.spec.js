@@ -101,6 +101,22 @@ describe('findCodexSession', () => {
     expect(findCodexSession({ cwd: 'C:\\TERMINAL', since }, home, now)).toBe(null)
   })
 
+  it('can pick the most recent session instead of the first', () => {
+    codexSession(A, 'C:\\TERMINAL', '2026-09-24T15:07:26.000Z')
+    codexSession(C, 'C:\\TERMINAL', '2026-09-24T15:09:00.000Z')
+    const since = Date.parse('2026-09-24T03:00:00Z')
+    expect(findCodexSession({ cwd: 'c:/terminal', since, latest: true }, home, now)).toBe(C)
+  })
+
+  it('with activeSince, ignores sessions not written since then', () => {
+    codexSession(A, 'C:/TERMINAL', '2026-09-24T15:07:26.000Z')
+    const since = Date.parse('2026-09-24T03:00:00Z')
+    const activeSince = Date.parse('2026-09-24T15:30:00Z')
+    expect(
+      findCodexSession({ cwd: 'C:/TERMINAL', since, latest: true, activeSince }, home, now)
+    ).toBe(null)
+  })
+
   it('returns null when Codex has no sessions', () => {
     expect(findCodexSession({ cwd: 'C:\\X', since: now - 1000 }, home, now)).toBe(null)
   })

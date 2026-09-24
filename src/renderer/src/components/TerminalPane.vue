@@ -4,6 +4,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { SearchAddon } from '@xterm/addon-search'
+import { WebglAddon } from '@xterm/addon-webgl'
 import { getBuffer } from '../ptyStore'
 import BrandIcon from './BrandIcon.vue'
 import { settings, fontStack } from '../settings'
@@ -509,12 +510,45 @@ onMounted(() => {
     findResult.count = resultCount
   })
   term.open(hostEl.value)
+  // Draw with the graphics card (much faster with busy agents and many
+  // panes), like VS Code. Falls back to the normal renderer if WebGL is
+  // unavailable or the graphics context is lost.
+  if (settings.gpuRendering)
+    try {
+      const gl = new WebglAddon()
+      gl.onContextLoss(() => {
+        try {
+          gl.dispose()
+        } catch {
+          /* already gone */
+        }
+      })
+      term.loadAddon(gl)
+    } catch {
+      /* no WebGL: keep the default renderer */
+    }
+
+  doFit()
+
+  // Output saved when the app last closed: write it, a divider, then enough
+  // blank lines to move it all into the scrollback, so the new shell (which
+  // clears the visible screen as it starts) draws below it without erasing it.
+  if (props.node.restoredText) {
+    const rows = Math.max(1, term.rows)
+    term.write(
+      props.node.restoredText +
+        // Reset, leave any full-screen mode and jump to the bottom row, so
+        // the screen drawn by the saved output scrolls up intact.
+        '\x1b[0m\x1b[?1049l\x1b[?25h\x1b[999;1H\r\n' +
+        '\x1b[2m──── restored from your last session (scroll up to see it) ────\x1b[0m' +
+        '\r\n'.repeat(rows)
+    )
+    props.node.restoredText = ''
+  }
 
   // Replay any buffered history (e.g. after this pane was re-parented by a split).
   const history = getBuffer(props.node.id)
   if (history) term.write(history)
-
-  doFit()
 
   // User input → routed through App (handles broadcast / multi-write).
   term.onData((data) => ctx.routeInput(props.node.id, data))
@@ -581,6 +615,7 @@ onMounted(() => {
   }
   registerPane(props.node.id, paneApi)
 
+  if (props.node.exitedAtStart) exited.value = true
   if (isActive.value) term.focus()
 })
 
@@ -954,7 +989,13 @@ onBeforeUnmount(() => {
       {{ newBelow ? 'New output' : 'Latest' }}
     </button>
 
-    <div v-if="exited" class="exit-overlay" @mousedown.stop>
+    <div v-if="node.failed" class="exit-overlay failed" @mousedown.stop>
+      <span :title="node.failed">This terminal couldn't start.</span>
+      <button class="exit-btn primary" @click="ctx.restartLeaf(node.id)">Retry</button>
+      <button class="exit-btn" @click="ctx.closeLeaf(node.id, { force: true })">Close pane</button>
+    </div>
+
+    <div v-else-if="exited" class="exit-overlay" @mousedown.stop>
       <span>Process exited{{ exitCode !== null ? ` with code ${exitCode}` : '' }}.</span>
       <button class="exit-btn primary" @click="ctx.restartLeaf(node.id)">Restart</button>
       <button class="exit-btn" @click="ctx.closeLeaf(node.id, { force: true })">Close pane</button>

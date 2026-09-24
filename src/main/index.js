@@ -3,10 +3,13 @@ import { join } from 'path'
 import os from 'os'
 import fs from 'fs'
 import { spawn, execFile, execFileSync } from 'child_process'
-import * as pty from 'node-pty'
 import { loadTasks, saveTasks } from './taskBoardPersistence'
 import { claudeSessionExists, findCodexSession, listSessions } from './agentSessions'
 import { createLogger, describe } from './logger'
+import { cleanEnv } from './cleanEnv'
+import { createPtyClient } from './ptyClient'
+import { pipeName } from './ptyProtocol'
+import crypto from 'crypto'
 import {
   gitInfo,
   createWorktree,
@@ -22,8 +25,6 @@ import {
 // PTY registry
 // ---------------------------------------------------------------------------
 /** @type {Map<string, import('node-pty').IPty>} */
-const ptys = new Map()
-const ptyBackends = new Map()
 // Pin the data folder (%APPDATA%\shell-panels) so the installed app and the
 // dev build share saved workspaces, settings and tasks, whatever the product
 // name the installer uses.
@@ -47,7 +48,7 @@ function appIconPath() {
 // button and notifications line up.
 const APP_ID = app.isPackaged
   ? 'com.jeanclaudetrottier.shellpanels'
-  : 'com.jeanclaudetrottier.shellpanels.dev'
+  : 'com.jeanclaudetrottier.shellpanels.dev2'
 if (process.platform === 'win32') app.setAppUserModelId(APP_ID)
 
 // Logs: %APPDATA%\\shell-panels\\logs\\shell-panels.log (rotated, 1 MB x 4).
@@ -212,8 +213,10 @@ function currentPath() {
 
 // process.env with PATH replaced by the fresh value (Windows env keys are
 // case-insensitive, so replace whichever spelling is present).
+// Environment for terminals and tools: without the variables of whatever
+// agent session launched Shell Panels (see cleanEnv.js), with a fresh PATH.
 function freshEnv() {
-  const env = { ...process.env }
+  const env = cleanEnv(process.env)
   const key = Object.keys(env).find((k) => k.toLowerCase() === 'path') || 'Path'
   env[key] = currentPath()
   return env
@@ -279,37 +282,6 @@ function shouldUseConpty() {
 function windowsBuildNumber() {
   const parts = os.release().split('.')
   return parts[2] ? Number(parts[2]) : undefined
-}
-
-function taskkillTree(pid) {
-  if (!pid) return
-  const killer = spawn('taskkill.exe', ['/PID', String(pid), '/T', '/F'], {
-    windowsHide: true,
-    stdio: 'ignore'
-  })
-  killer.on('error', () => {})
-}
-
-function terminatePty(id, child, forceDelay = 1500) {
-  const backend = ptyBackends.get(id)
-  if (backend === 'conpty') {
-    try {
-      child.write('\x03')
-      child.write('exit\r')
-    } catch {
-      /* pty already gone */
-    }
-    const timer = setTimeout(() => {
-      if (ptys.has(id)) taskkillTree(child.pid)
-    }, forceDelay)
-    timer.unref?.()
-    return
-  }
-  try {
-    child.kill()
-  } catch {
-    /* ignore */
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -436,7 +408,7 @@ ipcMain.handle('logs:diagnostics', () => {
     `version: ${app.getVersion()} (${app.isPackaged ? 'installed' : 'dev'})`,
     `electron ${process.versions.electron}, chrome ${process.versions.chrome}, node ${process.versions.node}`,
     `os: ${process.platform} ${os.release()} ${os.arch()}, ${Math.round(os.totalmem() / 1073741824)} GB RAM`,
-    `terminals open: ${ptys.size}`,
+    `terminals known to this window: ${ptyInfo.size}`,
     `log file: ${log.file}`,
     '',
     '--- recent log ---',
@@ -575,6 +547,9 @@ ipcMain.on('app:notify', (_evt, { title, body, paneId } = {}) => {
     send('app:focusPane', { paneId })
   })
   n.show()
+  // Showing a notification can make Electron recreate its shortcut with its
+  // own icon; put ours back right after.
+  setTimeout(ensureDevShortcut, 3000)
 })
 ipcMain.handle('agents:list', (_evt, custom) => getAgents(custom))
 // Which of these commands are on PATH (fresh PATH, so just-installed tools
@@ -656,97 +631,248 @@ ipcMain.on('clipboard:write', (_evt, text) => {
   if (typeof text === 'string' && text.length) clipboard.writeText(text)
 })
 
-ipcMain.handle('pty:create', (_evt, opts = {}) => {
-  const { id, shellId, cols = 80, rows = 24, cwd } = opts
-  if (!id) throw new Error('pty:create requires an id')
-  if (ptys.has(id)) throw new Error(`pty ${id} already exists`)
+// --- Terminals live in the terminal host (ptyHost.js) --------------------------
+// so they survive app restarts, crashes and reloads.
+const ptyInfo = new Map() // id -> { shellId, shellName, backend } for terminals this app knows
 
-  const shell = getShells().find((s) => s.id === shellId) || defaultShell()
-  const startDir = cwd && fs.existsSync(cwd) ? cwd : os.homedir()
-
-  let child
-  const useConpty = shouldUseConpty()
+function hostToken() {
+  const file = join(app.getPath('userData'), 'pty-host.token')
   try {
-    child = pty.spawn(shell.file, shell.args, {
-      name: 'xterm-256color',
-      cols: Math.max(2, cols | 0),
-      rows: Math.max(1, rows | 0),
-      cwd: startDir,
-      env: freshEnv(),
-      // ConPTY is the modern Windows terminal backend. It is required for
-      // full-screen TUIs like Claude Code to redraw on resize like they do in
-      // Windows Terminal. Set SHELL_PANELS_USE_WINPTY=1 only as a fallback.
-      useConpty
-    })
-  } catch (err) {
-    log.error(
-      'pty',
-      `failed to launch ${shell.name} (${shell.file}) in ${startDir}: ${err.message}`
-    )
-    return { ok: false, error: `Failed to launch ${shell.name}: ${err.message}` }
+    const t = fs.readFileSync(file, 'utf8').trim()
+    if (/^[0-9a-f]{64}$/.test(t)) return t
+  } catch {
+    /* create one */
   }
+  const t = crypto.randomBytes(32).toString('hex')
+  fs.mkdirSync(app.getPath('userData'), { recursive: true })
+  fs.writeFileSync(file, t, { mode: 0o600 })
+  return t
+}
 
-  child.onData((data) => send('pty:data', { id, data }))
-  child.onExit(({ exitCode, signal }) => {
-    ptys.delete(id)
-    ptyBackends.delete(id)
-    if (exitCode)
+const hostPipe = pipeName(
+  os.userInfo().username,
+  process.env.SP_PTYHOST_CHANNEL || (app.isPackaged ? 'app' : 'dev')
+)
+
+// Safety limit: never start more than 3 hosts a minute, whatever goes wrong.
+const hostStarts = []
+function startHost() {
+  const now = Date.now()
+  while (hostStarts.length && now - hostStarts[0] > 60000) hostStarts.shift()
+  if (hostStarts.length >= 3) {
+    log.error('pty', 'terminal host keeps failing to start; not trying again for a minute')
+    return
+  }
+  hostStarts.push(now)
+  const script = join(__dirname, 'ptyHost.js')
+  log.info('pty', `starting terminal host (${script})`)
+  const child = spawn(process.execPath, [script], {
+    env: {
+      ...cleanEnv(process.env),
+      ELECTRON_RUN_AS_NODE: '1',
+      SP_PTYHOST_PIPE: hostPipe,
+      SP_PTYHOST_TOKEN: hostToken(),
+      SP_LOG_DIR: log.dir
+    },
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true
+  })
+  child.on('error', (err) => log.error('pty', `could not start terminal host: ${err.message}`))
+  child.unref()
+}
+
+const pendingData = new Map() // id -> string
+let flushTimer = null
+function flushData() {
+  flushTimer = null
+  for (const [id, data] of pendingData) send('pty:data', { id, data })
+  pendingData.clear()
+}
+function queueData(id, data) {
+  pendingData.set(id, (pendingData.get(id) || '') + data)
+  if (!flushTimer) flushTimer = setTimeout(flushData, 8)
+}
+
+const host = createPtyClient({
+  pipe: hostPipe,
+  token: hostToken(),
+  startHost,
+  log,
+  // Output is batched per terminal (every ~8 ms) instead of one message per
+  // chunk: a busy agent can print thousands of small chunks a second.
+  onData: (id, data) => queueData(id, data),
+  onExit: (id, exitCode, signal) => {
+    flushData() // deliver the last output before the exit notice
+    const info = ptyInfo.get(id)
+    if (exitCode && info) {
       log.warn(
         'pty',
-        `${shell.name} ${id} exited with code ${exitCode}${signal ? ` (signal ${signal})` : ''}`
+        `${info.shellName} ${id} exited with code ${exitCode}${signal ? ` (signal ${signal})` : ''}`
       )
+    }
     send('pty:exit', { id, exitCode, signal })
-  })
+  },
+  onLost: () => {
+    if (quitting) return
+    log.error('pty', 'lost the connection to the terminal host')
+    // Its terminals are gone with it: tell the panes.
+    for (const id of ptyInfo.keys()) send('pty:exit', { id, exitCode: -1, signal: 0 })
+    ptyInfo.clear()
+  }
+})
 
-  ptys.set(id, child)
-  ptyBackends.set(id, useConpty ? 'conpty' : 'winpty')
+ipcMain.handle('pty:create', async (_evt, opts = {}) => {
+  const { id, shellId, cols = 80, rows = 24, cwd } = opts
+  if (!id) throw new Error('pty:create requires an id')
+  const shell = getShells().find((s) => s.id === shellId) || defaultShell()
+  const startDir = cwd && fs.existsSync(cwd) ? cwd : os.homedir()
+  const useConpty = shouldUseConpty()
+  const backend = useConpty ? 'conpty' : 'winpty'
+  let res
+  try {
+    res = await host.request('create', {
+      id,
+      file: shell.file,
+      args: shell.args,
+      cwd: startDir,
+      env: freshEnv(),
+      cols,
+      rows,
+      useConpty,
+      // ConPTY is required for full-screen TUIs like Claude Code to redraw on
+      // resize. Set SHELL_PANELS_USE_WINPTY=1 only as a fallback.
+      meta: { shellId: shell.id, shellName: shell.name, backend, cwd: startDir }
+    })
+  } catch (err) {
+    res = { ok: false, error: err.message }
+  }
+  if (!res.ok) {
+    log.error('pty', `failed to launch ${shell.name} (${shell.file}) in ${startDir}: ${res.error}`)
+    return { ok: false, error: `Failed to launch ${shell.name}: ${res.error}` }
+  }
+  ptyInfo.set(id, { shellId: shell.id, shellName: shell.name, backend })
   return {
     ok: true,
     shell: { id: shell.id, name: shell.name },
-    backend: useConpty ? 'conpty' : 'winpty',
+    backend,
     windowsBuild: windowsBuildNumber(),
-    pid: child.pid,
+    pid: res.pid,
     cwd: startDir
   }
 })
 
-ipcMain.on('pty:write', (_evt, { id, data }) => {
-  const child = ptys.get(id)
-  if (child) {
-    try {
-      child.write(data)
-    } catch {
-      /* pty already gone */
-    }
+// Re-attach to a terminal that kept running in the host (after a restart,
+// crash or reload). Returns its recent output to replay.
+ipcMain.handle('pty:attach', async (_evt, id) => {
+  let res
+  try {
+    res = await host.request('attach', { id })
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
+  if (!res.ok) return { ok: false }
+  ptyInfo.set(id, { shellId: res.shellId, shellName: res.shellName, backend: res.backend })
+  return {
+    ok: true,
+    shell: { id: res.shellId, name: res.shellName },
+    backend: res.backend,
+    windowsBuild: windowsBuildNumber(),
+    pid: res.pid,
+    cwd: res.cwd,
+    exited: !!res.exited,
+    exitCode: res.exitCode,
+    buffer: res.buffer || ''
   }
 })
 
-ipcMain.on('pty:resize', (_evt, { id, cols, rows }) => {
-  const child = ptys.get(id)
-  if (child && cols > 0 && rows > 0) {
-    try {
-      child.resize(cols | 0, rows | 0)
-    } catch {
-      /* ignore resize race */
+// After the interface restores its panes: close host terminals no pane uses.
+ipcMain.handle('pty:reconcile', async (_evt, liveIds = []) => {
+  let hello
+  try {
+    hello = await host.ensure()
+  } catch {
+    return 0
+  }
+  const keep = new Set(liveIds)
+  let closed = 0
+  const list = hello && hello.ptys ? hello.ptys.map((p) => p.id) : [...ptyInfo.keys()]
+  for (const id of list) {
+    if (!keep.has(id)) {
+      host.send('kill', { id })
+      ptyInfo.delete(id)
+      closed++
     }
   }
+  if (closed) log.info('pty', `closed ${closed} terminal(s) no pane was using`)
+  return closed
+})
+
+ipcMain.on('pty:write', (_evt, { id, data }) => host.send('write', { id, data }))
+
+ipcMain.on('pty:resize', (_evt, { id, cols, rows }) => {
+  if (cols > 0 && rows > 0) host.send('resize', { id, cols, rows })
 })
 
 ipcMain.on('pty:kill', (_evt, { id }) => {
-  const child = ptys.get(id)
-  if (child) {
-    terminatePty(id, child)
-    ptys.delete(id)
-    ptyBackends.delete(id)
+  host.send('kill', { id })
+  ptyInfo.delete(id)
+})
+
+// Recent output saved when you close the app, shown again when panes reopen.
+function scrollbackFile() {
+  return join(app.getPath('userData'), 'scrollback.json')
+}
+
+ipcMain.handle('scrollback:load', () => {
+  try {
+    const data = JSON.parse(fs.readFileSync(scrollbackFile(), 'utf8'))
+    fs.unlinkSync(scrollbackFile())
+    return data && typeof data === 'object' ? data : {}
+  } catch {
+    return {}
   }
 })
 
-function killAll() {
-  for (const [id, child] of ptys.entries()) {
-    terminatePty(id, child, 300)
+// Closing the app on purpose: save each terminal's recent output, then stop
+// the host and its terminals. (A crash or a dev restart skips this, so the
+// terminals keep running and the app re-attaches.)
+let quitting = false
+let shutdownDone = false
+// Save every terminal's recent output (64 KB each) for the next start.
+async function saveScrollback() {
+  try {
+    const res = await host.request('dump', {}, 4000)
+    const keep = {}
+    for (const [id, text] of Object.entries(res.buffers || {})) {
+      keep[id] = String(text).slice(-64 * 1024)
+    }
+    const tmp = scrollbackFile() + '.tmp'
+    fs.writeFileSync(tmp, JSON.stringify(keep))
+    fs.renameSync(tmp, scrollbackFile())
+  } catch (err) {
+    log.warn('pty', `could not save terminal output: ${err.message}`)
   }
-  ptys.clear()
-  ptyBackends.clear()
+}
+
+// Also every 30 s, and when Windows signs out or shuts down, so a reboot or
+// power loss still leaves recent output to show next time.
+setInterval(() => {
+  if (host.connected && !quitting) saveScrollback()
+}, 30000).unref()
+app.on('session-end', () => {
+  log.info('app', 'Windows is signing out or shutting down: saving terminal output')
+  saveScrollback()
+})
+
+async function shutdownTerminals() {
+  quitting = true
+  await saveScrollback()
+  try {
+    await host.request('shutdown', {}, 4000)
+  } catch {
+    /* host already gone */
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -817,17 +943,6 @@ function createWindow() {
   mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) =>
     log.error('window', `failed to load ${url}: ${desc} (${code})`)
   )
-  // A reload starts a fresh interface that spawns its own terminals: end the
-  // old ones so they don't linger in the background.
-  mainWindow.webContents.on('did-start-loading', () => {
-    if (ptys.size) {
-      log.warn(
-        'window',
-        `interface reloading; closing ${ptys.size} terminal(s) from the previous page`
-      )
-      killAll()
-    }
-  })
   mainWindow.webContents.on('unresponsive', () => {
     logCrashContext('renderer unresponsive')
   })
@@ -847,11 +962,10 @@ function createWindow() {
 // build keeps its own shortcut with our icon, and removes Electron's only when
 // it carries our id (other Electron apps are left alone).
 function ensureDevShortcut() {
-  if (process.platform !== 'win32' || app.isPackaged) return
+  if (process.platform !== 'win32' || app.isPackaged) return false
   const icon = appIconPath()
-  if (!fs.existsSync(icon)) return
+  if (!fs.existsSync(icon)) return false
   const programs = join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs')
-  const ours = join(programs, 'Shell Panels (dev).lnk')
   const details = {
     target: process.execPath,
     args: `"${app.getAppPath()}"`,
@@ -861,23 +975,48 @@ function ensureDevShortcut() {
     appUserModelId: APP_ID,
     description: 'Shell Panels (development build)'
   }
-  try {
-    const op = fs.existsSync(ours) ? 'replace' : 'create'
-    shell.writeShortcutLink(ours, op, details)
-  } catch (err) {
-    logCrashContext(`dev shortcut failed: ${err.message}`)
+  let repaired = false
+  const write = (file) => {
+    try {
+      shell.writeShortcutLink(file, fs.existsSync(file) ? 'replace' : 'create', details)
+    } catch (err) {
+      log.warn('app', `dev shortcut ${file} failed: ${err.message}`)
+    }
   }
+  write(join(programs, 'Shell Panels (dev).lnk'))
+  // Electron (re)creates "Electron.lnk" with Electron's icon and our id each
+  // time a notification is shown and the file is missing. Deleting it only
+  // lasts until the next notification, so keep it, with our icon instead.
   const electronLnk = join(programs, 'Electron.lnk')
   try {
-    if (
-      fs.existsSync(electronLnk) &&
-      shell.readShortcutLink(electronLnk).appUserModelId === APP_ID
-    ) {
-      fs.unlinkSync(electronLnk)
+    if (fs.existsSync(electronLnk)) {
+      const link = shell.readShortcutLink(electronLnk)
+      const ours = String(link.appUserModelId || '').startsWith(
+        'com.jeanclaudetrottier.shellpanels'
+      )
+      if (ours && link.icon !== icon) {
+        write(electronLnk)
+        repaired = true
+      }
+    } else {
+      write(electronLnk)
     }
   } catch {
-    /* not ours or unreadable: leave it */
+    /* unreadable: leave it */
   }
+  if (repaired) {
+    log.info('app', 'repaired the dev taskbar shortcut icon (Electron had reset it)')
+    // Ask Windows to refresh its icon cache so the taskbar picks it up.
+    try {
+      spawn(join(process.env.WINDIR || 'C:\\Windows', 'System32', 'ie4uinit.exe'), ['-show'], {
+        windowsHide: true,
+        stdio: 'ignore'
+      }).on('error', () => {})
+    } catch {
+      /* best-effort */
+    }
+  }
+  return repaired
 }
 
 app.whenReady().then(() => {
@@ -911,8 +1050,12 @@ process.on('unhandledRejection', (error) => {
 })
 
 app.on('window-all-closed', () => {
-  killAll()
   if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', killAll)
+app.on('before-quit', (event) => {
+  if (shutdownDone) return
+  event.preventDefault()
+  shutdownDone = true
+  shutdownTerminals().finally(() => app.quit())
+})

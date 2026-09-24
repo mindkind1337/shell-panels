@@ -13,7 +13,7 @@ import SessionsDialog from './components/SessionsDialog.vue'
 import { getPane } from './paneRegistry'
 import { chainCommands } from './shellChain'
 import { agentStatus, attention, clearAgentStatus, clearAttention } from './agentStatus'
-import { dropBuffer } from './ptyStore'
+import { dropBuffer, seedBuffer } from './ptyStore'
 import { tasks as boardTasks, setTasks, updateTask } from './taskBoardStore'
 
 const shells = ref([])
@@ -249,7 +249,9 @@ function watchCodexSession(leaf) {
       const id = await window.shellApi.findCodexSession({
         cwd: leaf.startDir,
         since: leaf.launchedAt,
-        exclude
+        exclude,
+        latest: !!leaf.launchGuessed,
+        activeSince: leaf.launchGuessed ? leaf.attachedAt : 0
       })
       if (id) {
         leaf.sessionId = id
@@ -265,18 +267,61 @@ function watchCodexSession(leaf) {
 
 async function createLeaf(shellId, agent = null, cwd = null, worktree = null, opts = {}) {
   if (worktree && worktree.path) cwd = worktree.path
-  const id = newId('pane')
-  let res
-  try {
-    res = await window.shellApi.createPty({ id, shellId, cols: 80, rows: 24, cwd })
-  } catch (err) {
-    res = { ok: false, error: err && err.message }
+  const id = opts.id || newId('pane')
+  let res = null
+  let attached = false
+  let restoredText = ''
+  // Reopening a pane: its terminal may still be running in the terminal host
+  // (after a restart, crash or reload). Re-attach and replay its output.
+  if (opts.id && window.shellApi.attachPty) {
+    try {
+      const a = await window.shellApi.attachPty(opts.id)
+      if (a && a.ok) {
+        res = a
+        attached = true
+        seedBuffer(id, a.buffer)
+      }
+    } catch {
+      /* fall back to a new terminal */
+    }
+  }
+  if (!attached) {
+    try {
+      res = await window.shellApi.createPty({ id, shellId, cols: 80, rows: 24, cwd })
+    } catch (err) {
+      res = { ok: false, error: err && err.message }
+    }
+    // The terminal stopped when the app closed: the pane shows what it last
+    // printed above the new session (see TerminalPane).
+    restoredText = res && res.ok ? opts.savedOutput || '' : ''
   }
   if (!res || !res.ok) {
     const msg = (res && res.error) || 'Could not start the terminal.'
-    initError.value = msg
     showToast(msg, { kind: 'error', timeout: 8000 })
-    return null
+    if (window.shellApi.log) window.shellApi.log('error', `pane ${id} could not start: ${msg}`)
+    if (!opts.keepOnFailure) {
+      initError.value = msg
+      return null
+    }
+    // Reopening a saved pane: keep it in place so it isn't lost from the
+    // layout; it shows the error and a Retry button.
+    const failed = reactive({
+      type: 'leaf',
+      id,
+      shellId,
+      shellName: shellId,
+      title: agent ? agent.name : shellId,
+      kind: agent ? 'agent' : 'shell',
+      agentId: agent ? agent.id : null,
+      agentCommand: agent ? agent.command : null,
+      accent: agent ? agent.accent : null,
+      worktree: worktree && worktree.path ? { path: worktree.path, branch: worktree.branch } : null,
+      backend: 'conpty',
+      sessionId: opts.sessionId || null,
+      failed: msg,
+      broadcast: true
+    })
+    return failed
   }
   const leaf = reactive({
     type: 'leaf',
@@ -295,8 +340,28 @@ async function createLeaf(shellId, agent = null, cwd = null, worktree = null, op
     startDir: res.cwd || cwd || null,
     sessionId: null,
     launchedAt: Date.now(),
+    exitedAtStart: attached && !!res.exited,
+    restoredText,
     broadcast: true
   })
+  if (attached) {
+    // Still running: nothing to start. Keep the pane's conversation id, and
+    // if Codex's id wasn't found yet, keep looking for it.
+    leaf.sessionId = opts.sessionId || null
+    if (opts.launchedAt) leaf.launchedAt = opts.launchedAt
+    else {
+      // Start time not recorded (older layout): take the latest session
+      // from this folder in the last 12 hours.
+      // Only a session you use from now on counts, so an unrelated older
+      // conversation in the same folder is never picked by mistake.
+      leaf.launchedAt = Date.now() - 12 * 3600 * 1000
+      leaf.attachedAt = Date.now()
+      leaf.launchGuessed = true
+    }
+    if (opts.startDir) leaf.startDir = opts.startDir
+    if (sessionKind(agent) === 'codex' && !leaf.sessionId) watchCodexSession(leaf)
+    return leaf
+  }
   // Launch the agent CLI once the shell has had a moment to print its prompt.
   if (agent && agent.command) {
     const start = await agentStartLine(agent, opts.sessionId || null, !!opts.resume)
@@ -366,6 +431,7 @@ function serializeNode(node) {
   if (node.type === 'leaf') {
     return {
       type: 'leaf',
+      id: node.id,
       shellId: node.shellId,
       title: node.title,
       broadcast: node.broadcast !== false,
@@ -375,6 +441,8 @@ function serializeNode(node) {
       accent: node.accent || null,
       worktree: node.worktree || null,
       sessionId: node.sessionId || null,
+      launchedAt: node.launchedAt || null,
+      startDir: node.startDir || null,
       num: node.num || null
     }
   }
@@ -400,8 +468,13 @@ async function deserializeNode(snap, cwd = null) {
           }
         : null
     const leaf = await createLeaf(snap.shellId, agent, cwd, snap.worktree || null, {
+      id: typeof snap.id === 'string' && /^pane-[\w-]+$/.test(snap.id) ? snap.id : null,
+      savedOutput: snap.id ? savedOutput[snap.id] || '' : '',
       sessionId: snap.sessionId || null,
-      resume: settings.resumeAgents
+      launchedAt: Number.isFinite(snap.launchedAt) ? snap.launchedAt : null,
+      startDir: typeof snap.startDir === 'string' ? snap.startDir : null,
+      resume: settings.resumeAgents,
+      keepOnFailure: true
     })
     if (!leaf) return null
     if (Number.isInteger(snap.num) && snap.num > 0) leaf.num = snap.num
@@ -1671,7 +1744,17 @@ function onKey(e) {
   }
 }
 
+// Output saved when the app last closed, by pane id (read once at startup).
+let savedOutput = {}
+
 async function restoreOrSeedLayout() {
+  if (window.shellApi.loadScrollback) {
+    try {
+      savedOutput = (await window.shellApi.loadScrollback()) || {}
+    } catch {
+      savedOutput = {}
+    }
+  }
   const def = shells.value.find((s) => s.id === 'powershell') || shells.value[0]
   selectedShell.value = def ? def.id : null
 
@@ -1737,6 +1820,11 @@ onMounted(async () => {
   shells.value = await window.shellApi.listShells()
   agents.value = await window.shellApi.listAgents()
   await restoreOrSeedLayout()
+  if (window.shellApi.reconcilePtys) {
+    const ids = []
+    forEachWsLeaf((l) => ids.push(l.id))
+    window.shellApi.reconcilePtys(ids)
+  }
   loadVoiceLanguages()
   // Settings (incl. your own agents) are loaded now; detect agents with them.
   await loadAgents()

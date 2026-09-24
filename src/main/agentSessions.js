@@ -80,9 +80,10 @@ function dayDirs(root, since, now) {
 }
 
 // The earliest Codex session started in `cwd` at or after `since` (ms) that
-// isn't already claimed by another pane.
+// isn't already claimed by another pane (or the most recent one, with
+// `latest`, for panes whose start time wasn't recorded).
 export function findCodexSession(
-  { cwd, since, exclude = [] },
+  { cwd, since, exclude = [], latest = false, activeSince = 0 },
   home = os.homedir(),
   now = Date.now()
 ) {
@@ -108,11 +109,13 @@ export function findCodexSession(
         continue
       }
       if (stat.mtimeMs < since - slack) continue
+      // Only sessions still being written (used after the pane re-attached).
+      if (activeSince && stat.mtimeMs < activeSince) continue
       const meta = parseCodexMeta(readFirstLine(full))
       if (!meta || skip.has(meta.id)) continue
       if (normDir(meta.cwd) !== want) continue
       if (meta.time && meta.time < since - slack) continue
-      if (!best || meta.time < best.time) best = meta
+      if (!best || (latest ? meta.time > best.time : meta.time < best.time)) best = meta
     }
   }
   return best ? best.id : null
