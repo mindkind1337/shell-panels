@@ -422,101 +422,6 @@ defineExpose({
                 @dblclick="startTeamRename(t)"
                 >{{ t.name }}</span
               >
-              <span class="ws-team-actions">
-                <button
-                  class="ws-icon-btn small"
-                  title="Add agents to this team"
-                  @click="startPick(t.id)"
-                >
-                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                    <path
-                      d="M8 3v10M3 8h10"
-                      stroke="currentColor"
-                      stroke-width="1.6"
-                      stroke-linecap="round"
-                    />
-                  </svg>
-                </button>
-                <button class="ws-icon-btn small" title="Rename" @click="startTeamRename(t)">
-                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                    <path
-                      d="M10.5 2.5l3 3L6 13H3v-3l7.5-7.5z"
-                      stroke="currentColor"
-                      stroke-width="1.4"
-                      stroke-linejoin="round"
-                    />
-                  </svg>
-                </button>
-                <button
-                  class="ws-icon-btn small"
-                  title="Message every agent of the team"
-                  @click="startTeamMessage(t)"
-                >
-                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                    <path
-                      d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2v-7z"
-                      stroke="currentColor"
-                      stroke-width="1.4"
-                      stroke-linejoin="round"
-                    />
-                  </svg>
-                </button>
-                <button
-                  class="ws-icon-btn small"
-                  title="Brief: shared notes file, and tell each agent its teammates"
-                  @click="emit('brief-team', t.id)"
-                >
-                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                    <path
-                      d="M4 2.5h6l2.5 2.5v8.5H4v-11zM6 7h4.5M6 9.5h4.5"
-                      stroke="currentColor"
-                      stroke-width="1.4"
-                      stroke-linejoin="round"
-                      stroke-linecap="round"
-                    />
-                  </svg>
-                </button>
-                <button
-                  class="ws-icon-btn small"
-                  title="Gather: bring the team's panes into this workspace, side by side"
-                  @click="emit('gather-team', t.id)"
-                >
-                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                    <rect
-                      x="2"
-                      y="3"
-                      width="5"
-                      height="10"
-                      rx="1.2"
-                      stroke="currentColor"
-                      stroke-width="1.4"
-                    />
-                    <rect
-                      x="9"
-                      y="3"
-                      width="5"
-                      height="10"
-                      rx="1.2"
-                      stroke="currentColor"
-                      stroke-width="1.4"
-                    />
-                  </svg>
-                </button>
-                <button
-                  class="ws-icon-btn small danger"
-                  title="Disband: the team goes away, its panes stay where they are"
-                  @click="emit('disband-team', t.id)"
-                >
-                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                    <path
-                      d="M4 4l8 8M12 4l-8 8"
-                      stroke="currentColor"
-                      stroke-width="1.5"
-                      stroke-linecap="round"
-                    />
-                  </svg>
-                </button>
-              </span>
             </div>
             <button
               v-for="m in t.members"
@@ -541,6 +446,43 @@ defineExpose({
                     : m.where
               }}</span>
             </button>
+            <div class="ws-team-bar">
+              <button
+                class="ws-team-btn"
+                title="Bring the team's panes into this workspace, side by side"
+                @click="emit('gather-team', t.id)"
+              >
+                Gather
+              </button>
+              <button
+                class="ws-team-btn"
+                :class="{ on: messagingTeamId === t.id }"
+                title="One message to every agent of the team"
+                @click="startTeamMessage(t)"
+              >
+                Message
+              </button>
+              <button
+                class="ws-team-btn"
+                title="Shared notes file, and tell each agent its teammates"
+                @click="emit('brief-team', t.id)"
+              >
+                Brief
+              </button>
+              <button class="ws-team-btn" title="Add agents to this team" @click="startPick(t.id)">
+                + Add
+              </button>
+              <button class="ws-team-btn" title="Rename the team" @click="startTeamRename(t)">
+                Rename
+              </button>
+              <button
+                class="ws-team-btn danger"
+                title="The team goes away; its panes stay where they are"
+                @click="emit('disband-team', t.id)"
+              >
+                Disband
+              </button>
+            </div>
             <div v-if="messagingTeamId === t.id" class="ws-team-message">
               <textarea
                 :ref="(el) => (messageEls[t.id] = el)"

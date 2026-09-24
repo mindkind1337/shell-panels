@@ -295,7 +295,9 @@
 }
 
 :root[data-theme='warp'] .ws-teams {
-  flex: 0 1 0;
+  /* Its own height (capped below), not a zero basis: the session list takes
+     the rest and would otherwise squeeze Teams to nothing. */
+  flex: 0 0 auto;
   min-height: 0;
   max-height: 40%;
   overflow-y: auto;
