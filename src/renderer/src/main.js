@@ -63,6 +63,13 @@ function showCrash(err) {
   row.append(button, logs)
   box.append(title, text, row, detail)
   document.body.appendChild(box)
+  // Dev build: agents edit this code while it runs, so a half-finished change
+  // can land here. Reload by itself as soon as the next change is saved.
+  if (import.meta.hot) {
+    text.textContent += ' This window reloads by itself when the code changes.'
+    import.meta.hot.on('vite:afterUpdate', () => window.location.reload())
+    import.meta.hot.on('vite:beforeFullReload', () => window.location.reload())
+  }
 }
 
 const app = createApp(App)

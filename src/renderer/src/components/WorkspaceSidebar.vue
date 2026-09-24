@@ -310,6 +310,13 @@ defineExpose({
           <span class="ws-session-name">{{ s.title }}</span>
           <span class="ws-session-state">{{ SESSION_STATE[s.state] }}</span>
         </span>
+        <span
+          v-if="s.team"
+          class="ws-session-team"
+          :style="{ '--team': s.team.color }"
+          :title="`Team: ${s.team.name}`"
+          >{{ s.team.name }}</span
+        >
         <span class="ws-session-num">{{ s.num }}</span>
       </button>
     </div>

@@ -121,6 +121,10 @@ function runToastAction(t) {
 const sidebarEl = ref(null)
 const currentWs = computed(() => workspaces.value.find((w) => w.id === currentWsId.value) || null)
 
+// Teams of agents working together (see "Teams" below).
+const TEAM_COLORS = ['#e0a526', '#3fb6a8', '#c77dd6', '#5b9df5', '#e2724f', '#8fbf4f']
+const teams = ref([]) // [{ id, name, color }]
+
 // `tree` and `activeId` always point at the current workspace, so the pane
 // operations below work unchanged.
 const tree = computed({
@@ -447,7 +451,8 @@ function serializeNode(node) {
       sessionId: node.sessionId || null,
       launchedAt: node.launchedAt || null,
       startDir: node.startDir || null,
-      num: node.num || null
+      num: node.num || null,
+      team: node.team || null
     }
   }
   return {
@@ -484,6 +489,7 @@ async function deserializeNode(snap, cwd = null) {
     if (Number.isInteger(snap.num) && snap.num > 0) leaf.num = snap.num
     if (snap.title) leaf.title = snap.title
     leaf.broadcast = snap.broadcast !== false
+    if (typeof snap.team === 'string') leaf.team = snap.team
     return leaf
   }
   const children = []
@@ -526,6 +532,7 @@ function saveLayoutNow() {
       workspaces.value.findIndex((w) => w.id === currentWsId.value)
     ),
     placement: placement.value,
+    teams: teams.value,
     settings: { ...settings },
     workspaces: workspaces.value.map((w) => ({
       id: w.id,
@@ -567,6 +574,7 @@ async function splitLeaf(
 
 function closeLeaf(leafId, opts = {}) {
   const ws = wsOfLeaf(leafId)
+  const hadTeam = !!findLeaf(leafId)?.team
   if (!opts.force && settings.confirmCloseAgent && ws) {
     let leaf = null
     forEachLeaf(ws.tree, (l) => {
@@ -598,6 +606,7 @@ function closeLeaf(leafId, opts = {}) {
       }
     })
   }
+  if (hadTeam) pruneTeams()
 }
 
 async function buildGrid(cols, rows, ws = currentWs.value) {
@@ -798,6 +807,8 @@ async function initUpdates() {
   }
 }
 
+// Declared before provide('panelCtx') reads it; the team helpers live further down.
+
 provide('panelCtx', {
   broadcast,
   activeId,
@@ -822,6 +833,13 @@ provide('panelCtx', {
   voiceLanguages,
   voiceLabel,
   voiceName,
+  teams,
+  teamById,
+  newTeam,
+  joinTeam,
+  leaveTeam,
+  gatherTeam,
+  disbandTeam,
   copied: (what) => showToast(`${what} copied.`, { timeout: 2000 })
 })
 
@@ -906,6 +924,30 @@ function buildCommands() {
       shortcut: 'Ctrl+Shift+K'
     }
   )
+
+  const active = activeId.value ? findLeaf(activeId.value) : null
+  const activeTeam = active ? teamById(active.team) : null
+  if (active && !activeTeam) {
+    add('Team', 'New team with the active pane', () => newTeam([active.id]))
+    for (const t of teams.value) {
+      add('Team', `Add the active pane to ${t.name}`, () => joinTeam(active.id, t.id))
+    }
+  }
+  const wsAgents = []
+  forEachLeaf(tree.value, (l) => l.kind === 'agent' && !l.team && wsAgents.push(l.id))
+  if (wsAgents.length > 1) {
+    add('Team', 'New team with every agent in this workspace', () => newTeam(wsAgents), {
+      hint: `${wsAgents.length} agents`
+    })
+  }
+  if (activeTeam) add('Team', `Remove the active pane from ${activeTeam.name}`, () => leaveTeam(active.id))
+  for (const t of teams.value) {
+    const n = teamMembers(t.id).length
+    add('Team', `Gather ${t.name}`, () => gatherTeam(t.id), {
+      hint: `Side by side in their own workspace (${n} ${n === 1 ? 'pane' : 'panes'})`
+    })
+    add('Team', `Disband ${t.name}`, () => disbandTeam(t.id), { hint: 'Panes stay where they are' })
+  }
 
   for (const t of THEMES) {
     if (t.id !== settings.theme) {
@@ -1839,6 +1881,113 @@ const workspaceItems = computed(() =>
   })
 )
 
+// --- Teams: agents that work together -------------------------------------------
+// A team is a name and a colour; each member pane keeps the team id (leaf.team),
+// so it survives moves between workspaces and is saved with the layout.
+// (TEAM_COLORS and the teams ref are declared above provide('panelCtx').)
+
+function isTeam(t) {
+  return (
+    t &&
+    typeof t.id === 'string' &&
+    typeof t.name === 'string' &&
+    typeof t.color === 'string' &&
+    /^#[0-9a-f]{6}$/i.test(t.color)
+  )
+}
+
+function teamById(id) {
+  return (id && teams.value.find((t) => t.id === id)) || null
+}
+
+function teamMembers(teamId) {
+  const out = []
+  forEachWsLeaf((l) => {
+    if (l.team === teamId) out.push(l)
+  })
+  return out
+}
+
+// Teams nobody belongs to any more (their panes were closed) go away.
+function pruneTeams() {
+  const used = new Set()
+  forEachWsLeaf((l) => l.team && used.add(l.team))
+  teams.value = teams.value.filter((t) => used.has(t.id))
+}
+
+function newTeam(leafIds) {
+  const names = new Set(teams.value.map((t) => t.name))
+  let n = 1
+  while (names.has(`Team ${n}`)) n++
+  const colors = new Set(teams.value.map((t) => t.color))
+  const color = TEAM_COLORS.find((c) => !colors.has(c)) || TEAM_COLORS[n % TEAM_COLORS.length]
+  const team = { id: newId('team'), name: `Team ${n}`, color }
+  teams.value.push(team)
+  for (const id of leafIds) {
+    const leaf = findLeaf(id)
+    if (leaf) leaf.team = team.id
+  }
+  return team
+}
+
+function joinTeam(leafId, teamId) {
+  const leaf = findLeaf(leafId)
+  if (!leaf || !teamById(teamId)) return
+  const old = leaf.team
+  leaf.team = teamId
+  if (old && old !== teamId) pruneTeams()
+}
+
+function leaveTeam(leafId) {
+  const leaf = findLeaf(leafId)
+  if (!leaf || !leaf.team) return
+  leaf.team = null
+  pruneTeams()
+}
+
+// "Dissocier": the team goes away, its panes stay where they are.
+function disbandTeam(teamId) {
+  const team = teamById(teamId)
+  if (!team) return
+  for (const leaf of teamMembers(teamId)) leaf.team = null
+  teams.value = teams.value.filter((t) => t.id !== teamId)
+  showToast(`${team.name} disbanded. Its panes stay where they are.`, { timeout: 3000 })
+}
+
+// "Réunir": the members side by side in a workspace named after the team.
+function gatherTeam(teamId) {
+  const team = teamById(teamId)
+  const members = teamMembers(teamId)
+  if (!team || !members.length) return
+  const homes = new Set(members.map((l) => wsOfLeaf(l.id)))
+  if (homes.size === 1) {
+    const home = [...homes][0]
+    let count = 0
+    forEachLeaf(home.tree, () => count++)
+    if (count === members.length) {
+      selectWorkspace(home.id)
+      return
+    }
+  }
+  const ws = makeWorkspace(team.name)
+  ws.cwd = wsOfLeaf(members[0].id)?.cwd || null
+  for (const leaf of members) detachLeaf(wsOfLeaf(leaf.id), leaf.id)
+  ws.tree =
+    members.length === 1
+      ? members[0]
+      : reactive({
+          type: 'split',
+          id: newId('split'),
+          dir: 'row',
+          sizes: members.map(() => 100 / members.length),
+          children: members
+        })
+  ws.activeId = members[0].id
+  workspaces.value.push(ws)
+  selectWorkspace(ws.id)
+  refitSoon()
+}
+
 // Panes of the current workspace with their agent state, for the sidebar's
 // session list. Only the Warp theme shows it.
 const sessionItems = computed(() => {
@@ -1857,6 +2006,7 @@ const sessionItems = computed(() => {
       agentId: leaf.agentId || null,
       shellId: leaf.shellId || null,
       accent: leaf.accent || null,
+      team: teamById(leaf.team),
       state,
       active: leaf.id === activeId.value
     })
@@ -2015,6 +2165,7 @@ async function restoreOrSeedLayout() {
       saved.settings || (Number.isFinite(saved.fontSize) ? { fontSize: saved.fontSize } : null)
     )
     if (['right', 'down', 'workspace'].includes(saved.placement)) placement.value = saved.placement
+    if (Array.isArray(saved.teams)) teams.value = saved.teams.filter(isTeam)
     // v2 stores a list of workspaces; v1 stored a single tree.
     const snaps = !settings.restoreWorkspaces
       ? []
@@ -2078,6 +2229,7 @@ onMounted(async () => {
   )
 
   // Persist on any structural / size / title / broadcast change (debounced).
+  pruneTeams()
   persistReady = true
   watch(
     [
@@ -2088,7 +2240,8 @@ onMounted(async () => {
       sidebarCollapsed,
       sidebarWidth,
       settings,
-      placement
+      placement,
+      teams
     ],
     scheduleSave,
     {
