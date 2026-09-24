@@ -190,6 +190,17 @@ defineExpose({
     <div class="ws-head">
       <span v-if="!collapsed" class="ws-head-title">Workspaces</span>
       <button
+        v-if="!collapsed"
+        class="ws-icon-btn ws-head-new"
+        title="New workspace (Ctrl+Shift+N)"
+        aria-label="New workspace"
+        @click="emit('create')"
+      >
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+        </svg>
+      </button>
+      <button
         class="ws-icon-btn"
         :title="collapsed ? 'Expand sidebar' : 'Collapse sidebar'"
         @click="emit('toggle')"
@@ -342,11 +353,16 @@ defineExpose({
       </template>
     </div>
 
-    <button class="ws-new" title="New workspace (Ctrl+Shift+N)" @click="emit('create')">
+    <button
+      v-if="collapsed"
+      class="ws-new"
+      title="New workspace (Ctrl+Shift+N)"
+      aria-label="New workspace"
+      @click="emit('create')"
+    >
       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
         <path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
       </svg>
-      <span v-if="!collapsed">New workspace</span>
     </button>
 
     <!-- The current workspace's panes: agents and shells, with their state. -->

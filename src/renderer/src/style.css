@@ -3886,3 +3886,9 @@ body.pane-dragging * {
 .ws-sidebar:has(.ws-sessions) .ws-list {
   flex: 0 1 auto;
 }
+
+/* "+" for a new workspace sits right before the collapse button. */
+.ws-head-new {
+  margin-left: auto;
+  margin-right: 2px;
+}
