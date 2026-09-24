@@ -57,8 +57,19 @@ const IDLE_AFTER_MS = 1400
 // Only a real stretch of work counts as "finished" (typing echoes and redraws
 // also produce output, but only for a moment).
 const ATTENTION_AFTER_MS = 4000
+let lastRecheck = 0
 function markActivity() {
   if (!isAgent.value) return
+  // An approval prompt or a usage limit flagged earlier: still on screen? An
+  // agent that keeps redrawing a spinner ("Working 12m") never goes quiet, so
+  // this cannot wait for the idle check below. At most once a second.
+  const id = props.node.id
+  if ((approvals[id] || limits[id]) && Date.now() - lastRecheck > 1000) {
+    lastRecheck = Date.now()
+    const screen = screenText(12)
+    if (approvals[id] && !detectApproval(screen)) setApproval(id, false)
+    if (limits[id] && !detectLimit(screen)) clearLimit(id)
+  }
   if (agentStatus.value !== 'busy') busySince = Date.now()
   agentStatus.value = 'busy'
   if (statusTimer) clearTimeout(statusTimer)
