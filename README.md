@@ -113,8 +113,9 @@ first time; choose **More info → Run anyway**. `npm run dist:dir` builds an
 unpacked copy in `dist/win-unpacked/` without the installer, which is quicker
 for testing.
 
-Saved workspaces, settings and tasks live in `%APPDATA%\tessel`, shared
-by the installed app and the dev build.
+Saved workspaces, settings and tasks live in `%APPDATA%\tessel` for the
+installed app and `%APPDATA%\tessel-dev` for the dev build, so one of each can
+be open at the same time. The dev build shows a yellow logo and "(dev)".
 
 **Coming from Shell Panels?** Tessel is a separate app (new app id), so it
 installs next to Shell Panels instead of replacing it. On its first start it

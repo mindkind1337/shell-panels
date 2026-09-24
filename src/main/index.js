@@ -26,34 +26,27 @@ import {
 // PTY registry
 // ---------------------------------------------------------------------------
 /** @type {Map<string, import('node-pty').IPty>} */
-// Pin the data folder (%APPDATA%\tessel) so the installed app and the
-// dev build share saved workspaces, settings and tasks, whatever the product
-// name the installer uses.
+// Data folders: the installed app keeps its workspaces, settings and tasks in
+// %APPDATA%\tessel, the dev build in %APPDATA%\tessel-dev. Separate, so both
+// can be open at once (each allows one copy of itself) without overwriting
+// each other's layout or resuming the same agent conversations twice.
 // TESSEL_USER_DATA overrides it (used for testing without touching your
 // real workspaces).
-app.setPath('userData', process.env.TESSEL_USER_DATA || join(app.getPath('appData'), 'tessel'))
+const DATA_DIR = app.isPackaged ? 'tessel' : 'tessel-dev'
+app.setPath('userData', process.env.TESSEL_USER_DATA || join(app.getPath('appData'), DATA_DIR))
 
-// The app was called Shell Panels and kept its data in %APPDATA%\shell-panels.
-// On the first start as Tessel, copy it over so workspaces, settings, tasks and
-// saved output carry across. A copy, not a move: the old app may still be open.
-// Skipped: the old terminal host's token (Tessel runs its own host), logs and
-// Chromium caches. Files the old app holds locked are skipped one by one.
-function migrateOldUserData() {
-  if (process.env.TESSEL_USER_DATA) return
-  const from = join(app.getPath('appData'), 'shell-panels')
-  const to = app.getPath('userData')
-  if (fs.existsSync(to) || !fs.existsSync(from)) return
-  const skip = new Set([
-    'pty-host.token',
-    'update-installed.json',
-    'logs',
-    'Cache',
-    'Code Cache',
-    'GPUCache',
-    'DawnGraphiteCache',
-    'DawnWebGPUCache',
-    'lockfile'
-  ])
+// Chromium caches and per-run files are never copied between data folders.
+const NOT_COPIED = [
+  'update-installed.json',
+  'logs',
+  'Cache',
+  'Code Cache',
+  'GPUCache',
+  'DawnGraphiteCache',
+  'DawnWebGPUCache',
+  'lockfile'
+]
+function copyUserData(from, to, skip) {
   const copyDir = (src, dest) => {
     fs.mkdirSync(dest, { recursive: true })
     for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
@@ -70,11 +63,45 @@ function migrateOldUserData() {
   }
   try {
     copyDir(from, to)
+    return true
   } catch {
-    /* best-effort: Tessel starts fresh */
+    return false /* best-effort: start fresh */
   }
 }
-migrateOldUserData()
+
+// First start with a new data folder: bring the data along.
+// - Installed app: the app was called Shell Panels and kept its data in
+//   %APPDATA%\shell-panels; copy it (not the old terminal host's token).
+// - Dev build: until 1.2.1 it shared %APPDATA%\tessel with the installed app.
+//   The dev build takes those workspaces (and the terminal host token, so it
+//   re-attaches to the terminals still running), and the installed app's
+//   copy loses its workspace list (kept in a backup), so the two don't reopen
+//   the same panes and agent conversations.
+function migrateUserData() {
+  if (process.env.TESSEL_USER_DATA) return
+  const to = app.getPath('userData')
+  if (fs.existsSync(to)) return
+  const appData = app.getPath('appData')
+  if (app.isPackaged) {
+    const from = join(appData, 'shell-panels')
+    if (fs.existsSync(from)) copyUserData(from, to, new Set(['pty-host.token', ...NOT_COPIED]))
+    return
+  }
+  const shared = join(appData, 'tessel')
+  if (!fs.existsSync(shared)) return
+  if (!copyUserData(shared, to, new Set(NOT_COPIED))) return
+  const layout = join(shared, 'workspace-layout.json')
+  try {
+    const data = JSON.parse(fs.readFileSync(layout, 'utf8'))
+    fs.copyFileSync(layout, join(shared, 'workspace-layout.before-dev-split.json'))
+    data.workspaces = []
+    delete data.tree
+    fs.writeFileSync(layout, JSON.stringify(data, null, 2))
+  } catch {
+    /* no layout there: nothing to split */
+  }
+}
+migrateUserData()
 
 let mainWindow = null
 
@@ -1125,11 +1152,11 @@ function ensureDevShortcut() {
   return repaired
 }
 
-// One running copy at a time. The dev build and the installed app share the
-// same saved data (%APPDATA%\tessel); two copies at once would overwrite
-// each other's layout and saved output. Opening a second copy focuses the
-// first instead. (TESSEL_USER_DATA gives tests their own data, so they
-// get their own lock.)
+// One running copy per data folder: two copies on the same data would
+// overwrite each other's layout and saved output, so opening a second copy
+// focuses the first instead. The installed app and the dev build have their
+// own data folders (see DATA_DIR), so one of each can run side by side.
+// (TESSEL_USER_DATA gives tests their own data, so they get their own lock.)
 const gotInstanceLock = app.requestSingleInstanceLock()
 if (!gotInstanceLock) {
   // Quit without touching the terminal host: it belongs to the running copy.
