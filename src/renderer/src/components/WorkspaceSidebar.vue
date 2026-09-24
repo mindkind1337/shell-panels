@@ -18,12 +18,15 @@ const props = defineProps({
   sessions: { type: Array, default: null },
   // Teams of agents: [{ id, name, color, members: [{ id, num, title, kind,
   // agentId, shellId, accent, where, here, state }] }]
-  teams: { type: Array, default: () => [] }
+  teams: { type: Array, default: () => [] },
+  // Agents in the current workspace that are in no team yet.
+  freeAgents: { type: Number, default: 0 }
 })
 
 const emit = defineEmits([
   'focus-pane',
   'new-team',
+  'new-team-workspace',
   'rename-team',
   'gather-team',
   'disband-team',
@@ -357,7 +360,7 @@ defineExpose({
       <span v-if="!collapsed">New workspace</span>
     </button>
 
-    <div v-if="teams.length && !collapsed" class="ws-teams" aria-label="Teams">
+    <div v-if="!collapsed" class="ws-teams" aria-label="Teams">
       <div class="ws-head">
         <span class="ws-head-title">Teams</span>
         <button
@@ -368,6 +371,19 @@ defineExpose({
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
           </svg>
+        </button>
+      </div>
+      <div v-if="!teams.length" class="ws-teams-empty">
+        <p>Agents that work together share a colour, notes and messages.</p>
+        <button
+          v-if="freeAgents > 1"
+          class="ws-teams-start"
+          @click="emit('new-team-workspace')"
+        >
+          Team up the {{ freeAgents }} agents here
+        </button>
+        <button class="ws-teams-start secondary" @click="emit('new-team')">
+          New team with the active pane
         </button>
       </div>
       <div v-for="t in teams" :key="t.id" class="ws-team" :style="{ '--team': t.color }">

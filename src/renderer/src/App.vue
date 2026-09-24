@@ -937,8 +937,7 @@ function buildCommands() {
       add('Team', `Add the active pane to ${t.name}`, () => joinTeam(active.id, t.id))
     }
   }
-  const wsAgents = []
-  forEachLeaf(tree.value, (l) => l.kind === 'agent' && !l.team && wsAgents.push(l.id))
+  const wsAgents = freeAgentIds.value
   if (wsAgents.length > 1) {
     add('Team', 'New team with every agent in this workspace', () => newTeam(wsAgents), {
       hint: `${wsAgents.length} agents`
@@ -2250,6 +2249,13 @@ function paneState(leaf) {
   return agentStatus[leaf.id] === 'busy' ? 'working' : 'ready'
 }
 
+// Agents of the current workspace that are in no team yet.
+const freeAgentIds = computed(() => {
+  const ids = []
+  forEachLeaf(tree.value, (l) => l.kind === 'agent' && !l.team && ids.push(l.id))
+  return ids
+})
+
 // Every team with its members and where they are, for the sidebar.
 const teamItems = computed(() =>
   teams.value.map((t) => ({
@@ -2895,8 +2901,10 @@ onBeforeUnmount(() => {
         :width="sidebarWidth"
         :sessions="sessionItems"
         :teams="teamItems"
+        :free-agents="freeAgentIds.length"
         @focus-pane="focusPane"
         @new-team="activeId && newTeam([activeId])"
+        @new-team-workspace="freeAgentIds.length && newTeam(freeAgentIds)"
         @rename-team="renameTeam"
         @gather-team="gatherTeam"
         @disband-team="disbandTeam"

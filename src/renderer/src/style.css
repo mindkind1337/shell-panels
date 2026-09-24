@@ -3804,3 +3804,38 @@ body.pane-dragging * {
 .ws-session.limited .ws-session-state {
   color: #ffb4b6;
 }
+
+/* Teams section before the first team: what it is and how to start. */
+.ws-teams-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 12px 4px 14px;
+}
+
+.ws-teams-empty p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.ws-teams-start {
+  height: 28px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text-strong);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ws-teams-start.secondary {
+  border-color: var(--border-strong);
+  background: transparent;
+  color: var(--text);
+}
+
+.ws-teams-start:hover {
+  border-color: var(--accent);
+}
