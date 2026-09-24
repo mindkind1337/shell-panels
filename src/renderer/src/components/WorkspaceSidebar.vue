@@ -2,7 +2,7 @@
 // Left sidebar: what needs you, then the workspaces, each with its agents.
 // A workspace is a project: its folder, its panes and the agents working in
 // it together. The sidebar only renders and emits intents: App owns the state.
-import { ref, nextTick } from 'vue'
+import { ref, computed, nextTick } from 'vue'
 import BrandIcon from './BrandIcon.vue'
 
 const props = defineProps({
@@ -17,13 +17,19 @@ const props = defineProps({
   inbox: { type: Array, default: () => [] },
   // Every pane of the current workspace, for "Sessions": [{ id, num, title,
   //   kind, agentId, shellId, accent, state, reset, held, active }]
-  sessions: { type: Array, default: () => [] }
+  sessions: { type: Array, default: () => [] },
+  // Teams (groups of agents): [{ id, name, color }]; a session's `team` is an id.
+  teams: { type: Array, default: () => [] }
 })
 
 const emit = defineEmits([
   'focus-pane',
   'message-ws',
   'notes-ws',
+  'create-team',
+  'rename-team',
+  'disband-team',
+  'message-team',
   'folder',
   'select',
   'create',
@@ -163,9 +169,80 @@ function startMessage(wsId) {
 
 function sendMessage() {
   const text = messageDraft.value.trim()
-  if (text) emit('message-ws', messagingId.value, text)
+  const target = messagingId.value || ''
+  if (text && target.startsWith('team:')) emit('message-team', target.slice(5), text)
+  else if (text) emit('message-ws', target, text)
   messagingId.value = null
   messageDraft.value = ''
+}
+
+// --- Teams in "Sessions" -----------------------------------------------------
+// Rows in display order: each team (header, then its members), then the
+// sessions in no team.
+const rows = computed(() => {
+  const out = []
+  const inTeam = new Set()
+  for (const t of props.teams) {
+    const members = props.sessions.filter((x) => x.team === t.id)
+    if (!members.length) continue
+    out.push({ key: 'team:' + t.id, type: 'team', team: t, count: members.length })
+    for (const m of members) {
+      inTeam.add(m.id)
+      out.push({ key: m.id, type: 'session', s: m, team: t })
+    }
+  }
+  for (const x of props.sessions) {
+    if (!inTeam.has(x.id)) out.push({ key: x.id, type: 'session', s: x, team: null })
+  }
+  return out
+})
+
+// "New team": tick agents, then group them.
+const picking = ref(false)
+const picked = ref([])
+
+function startPicking() {
+  picking.value = !picking.value
+  picked.value = []
+}
+
+function togglePicked(id) {
+  picked.value = picked.value.includes(id)
+    ? picked.value.filter((x) => x !== id)
+    : [...picked.value, id]
+}
+
+function groupPicked() {
+  if (picked.value.length) emit('create-team', picked.value.slice())
+  picking.value = false
+  picked.value = []
+}
+
+function onSession(x) {
+  if (picking.value) {
+    if (x.kind === 'agent') togglePicked(x.id)
+  } else emit('focus-pane', x.id)
+}
+
+// Rename a team in place.
+const editingTeam = ref(null)
+const teamDraft = ref('')
+const teamInputEls = {}
+
+function startTeamRename(t) {
+  editingTeam.value = t.id
+  teamDraft.value = t.name
+  nextTick(() => {
+    const el = teamInputEls[t.id]
+    if (el) el.select()
+  })
+}
+
+function commitTeamRename() {
+  if (!editingTeam.value) return
+  const name = teamDraft.value.trim()
+  if (name) emit('rename-team', editingTeam.value, name)
+  editingTeam.value = null
 }
 
 defineExpose({
@@ -373,6 +450,24 @@ defineExpose({
         <template v-if="sessions.some((s) => s.kind === 'agent')">
           <button
             class="ws-icon-btn ws-head-new"
+            :class="{ on: picking }"
+            title="New team: tick the agents that work together"
+            aria-label="New team"
+            @click="startPicking"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <circle cx="5.5" cy="5.5" r="2.2" stroke="currentColor" stroke-width="1.3" />
+              <circle cx="11" cy="6" r="1.8" stroke="currentColor" stroke-width="1.3" />
+              <path
+                d="M1.8 13c.4-2.2 1.9-3.4 3.7-3.4s3.3 1.2 3.7 3.4M9.6 9.8c.4-.2.9-.3 1.4-.3 1.6 0 2.8 1 3.1 3"
+                stroke="currentColor"
+                stroke-width="1.3"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+          <button
+            class="ws-icon-btn"
             :class="{ on: messagingId === currentId }"
             title="Message all: one message, sent to each agent of this workspace (never to plain shells)"
             aria-label="Message all agents"
@@ -421,26 +516,128 @@ defineExpose({
           </button>
         </div>
       </div>
-      <button
-        v-for="s in sessions"
-        :key="s.id"
-        class="ws-session"
-        :class="[s.state, { active: s.active }]"
-        :title="`Go to pane ${s.num || ''}`"
-        @click="emit('focus-pane', s.id)"
-      >
-        <BrandIcon
-          :kind="s.kind === 'agent' ? s.agentId : s.shellId"
-          :accent="s.kind === 'agent' ? s.accent : null"
-          :label="s.kind === 'agent' ? s.title : null"
-          :size="14"
-        />
-        <span class="ws-session-body">
-          <span class="ws-session-name">{{ s.title }}</span>
-          <span class="ws-session-state">{{ stateText(s) }}</span>
-        </span>
-        <span class="ws-session-num">{{ s.num }}</span>
-      </button>
+      <template v-for="r in rows" :key="r.key">
+        <div
+          v-if="r.type === 'team'"
+          class="ws-team-row"
+          :style="{ '--team': r.team.color }"
+        >
+          <span class="ws-team-dot"></span>
+          <input
+            v-if="editingTeam === r.team.id"
+            :ref="(el) => (teamInputEls[r.team.id] = el)"
+            v-model="teamDraft"
+            class="ws-input"
+            maxlength="40"
+            @blur="commitTeamRename"
+            @keydown.enter.prevent.stop="commitTeamRename"
+            @keydown.escape.prevent.stop="editingTeam = null"
+          />
+          <span
+            v-else
+            class="ws-team-name"
+            title="Double-click to rename"
+            @dblclick="startTeamRename(r.team)"
+            >{{ r.team.name }}</span
+          >
+          <span class="ws-team-count">{{ r.count }}</span>
+          <button
+            class="ws-icon-btn small"
+            :class="{ on: messagingId === 'team:' + r.team.id }"
+            :title="`Message ${r.team.name}: one message to each of its agents`"
+            aria-label="Message the team"
+            @click="startMessage('team:' + r.team.id)"
+          >
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path
+                d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2v-7z"
+                stroke="currentColor"
+                stroke-width="1.4"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+          <button
+            class="ws-icon-btn small"
+            title="Rename the team"
+            aria-label="Rename the team"
+            @click="startTeamRename(r.team)"
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path
+                d="M10.5 2.5l3 3L6 13H3v-3l7.5-7.5z"
+                stroke="currentColor"
+                stroke-width="1.4"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+          <button
+            class="ws-icon-btn small danger"
+            title="Ungroup: the team goes away, its sessions stay"
+            aria-label="Ungroup the team"
+            @click="emit('disband-team', r.team.id)"
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+            </svg>
+          </button>
+        </div>
+        <div v-if="r.type === 'team' && messagingId === 'team:' + r.team.id" class="ws-message">
+          <textarea
+            :ref="(el) => (messageEls['team:' + r.team.id] = el)"
+            v-model="messageDraft"
+            rows="3"
+            :placeholder="`Message every agent of ${r.team.name}… (Enter to send, Shift+Enter for a new line)`"
+            @keydown.enter.exact.prevent="sendMessage"
+            @keydown.escape.prevent.stop="messagingId = null"
+          ></textarea>
+          <div class="ws-message-actions">
+            <button class="ws-message-cancel" @click="messagingId = null">Cancel</button>
+            <button class="ws-message-send" :disabled="!messageDraft.trim()" @click="sendMessage">
+              Send
+            </button>
+          </div>
+        </div>
+        <button
+          v-if="r.type === 'session'"
+          class="ws-session"
+          :class="[
+            r.s.state,
+            {
+              active: r.s.active && !picking,
+              'in-team': !!r.team,
+              picked: picked.includes(r.s.id),
+              unpickable: picking && r.s.kind !== 'agent'
+            }
+          ]"
+          :style="r.team ? { '--team': r.team.color } : null"
+          :title="picking ? (r.s.kind === 'agent' ? 'Tick to put in the team' : 'Terminals cannot be in a team') : `Go to pane ${r.s.num || ''}`"
+          @click="onSession(r.s)"
+        >
+          <span v-if="picking" class="ws-pick-box" :class="{ on: picked.includes(r.s.id) }"></span>
+          <BrandIcon
+            :kind="r.s.kind === 'agent' ? r.s.agentId : r.s.shellId"
+            :accent="r.s.kind === 'agent' ? r.s.accent : null"
+            :label="r.s.kind === 'agent' ? r.s.title : null"
+            :size="14"
+          />
+          <span class="ws-session-body">
+            <span class="ws-session-name">{{ r.s.title }}</span>
+            <span class="ws-session-state">{{ stateText(r.s) }}</span>
+          </span>
+          <span class="ws-session-num">{{ r.s.num }}</span>
+        </button>
+      </template>
+      <div v-if="picking" class="ws-pick-bar">
+        <span>{{ picked.length ? `${picked.length} selected` : 'Tick the agents that work together' }}</span>
+        <div class="ws-message-actions">
+          <button class="ws-message-cancel" @click="startPicking">Cancel</button>
+          <button class="ws-message-send" :disabled="!picked.length" @click="groupPicked">
+            Group as a team
+          </button>
+        </div>
+      </div>
     </section>
 
     <div

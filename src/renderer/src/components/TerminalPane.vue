@@ -118,6 +118,15 @@ const limit = computed(() => limits[props.node.id] || null)
 
 const asksApproval = computed(() => !!approvals[props.node.id])
 
+// The team this pane is in (a named, coloured group of agents), if any.
+const team = computed(() => ctx.teamById(props.node.team))
+const paneStyle = computed(() => {
+  const style = {}
+  if (isAgent.value) style['--accent'] = props.node.accent
+  if (team.value) style['--team'] = team.value.color
+  return style
+})
+
 function acknowledge() {
   clearAttention(props.node.id)
 }
@@ -866,9 +875,10 @@ onBeforeUnmount(() => {
       agent: isAgent,
       'needs-you': needsYou,
       highlighted: ctx.highlightId.value === node.id,
+      'in-team': !!team,
       dropping
     }"
-    :style="isAgent ? { '--accent': node.accent } : null"
+    :style="paneStyle"
     :data-pane-id="node.id"
     @mousedown="focusTerm"
     @contextmenu="onContextMenu"
@@ -942,6 +952,12 @@ onBeforeUnmount(() => {
           </svg>
           {{ node.worktree.branch }}
         </span>
+        <span
+          v-if="team"
+          class="pane-team"
+          :title="`Team: ${team.name} (manage it under Sessions)`"
+          >{{ team.name }}</span
+        >
         <span
           v-if="isAgent && asksApproval"
           class="pane-approval"
@@ -1302,6 +1318,12 @@ onBeforeUnmount(() => {
             <span class="ctx-menu-shortcut">{{ p.branch || p.where }}</span>
           </button>
         </template>
+        <div class="ctx-menu-sep"></div>
+      </template>
+      <template v-if="team">
+        <button class="ctx-menu-item" @click="closeCtxMenu(), ctx.leaveTeam(node.id)">
+          Leave {{ team.name }}
+        </button>
         <div class="ctx-menu-sep"></div>
       </template>
       <button class="ctx-menu-item" @click="menuOpenHere">Open terminal or agent here…</button>

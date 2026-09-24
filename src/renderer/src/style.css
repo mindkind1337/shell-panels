@@ -3902,3 +3902,103 @@ body.pane-dragging * {
 .ws-icon-btn.on {
   color: var(--accent);
 }
+
+/* Teams: named, coloured groups of agents (--team is the team's colour). */
+.pane.in-team .pane-nav {
+  box-shadow: inset 0 2px 0 var(--team);
+}
+
+.pane-team {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  padding: 1px 7px;
+  border: 1px solid color-mix(in srgb, var(--team) 55%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--team) 16%, transparent);
+  color: color-mix(in srgb, var(--team) 70%, var(--text-strong));
+  font-size: 10.5px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ws-team-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  margin-top: 6px;
+  padding: 0 4px 0 10px;
+}
+
+.ws-team-row .ws-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ws-team-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 3px;
+  background: var(--team);
+}
+
+.ws-team-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--team) 60%, var(--text-strong));
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ws-team-count {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.ws-session.in-team {
+  box-shadow: inset 2px 0 var(--team);
+  border-radius: 0 6px 6px 0;
+}
+
+/* "New team" pick mode. */
+.ws-pick-box {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 4px;
+}
+
+.ws-pick-box.on {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: inset 0 0 0 2px var(--surface);
+}
+
+.ws-session.picked {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.ws-session.unpickable {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.ws-pick-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 2px 0;
+  padding: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+}

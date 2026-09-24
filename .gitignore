@@ -23,3 +23,6 @@ Thumbs.db
 .claude/*.lock
 .claude/scheduled_tasks.lock
 dev-app-update.yml
+
+# Tessel project notes shared by the agents (see "Project notes")
+.tessel/

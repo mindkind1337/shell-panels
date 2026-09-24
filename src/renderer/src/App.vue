@@ -129,6 +129,11 @@ function runToastAction(t) {
 const sidebarEl = ref(null)
 const currentWs = computed(() => workspaces.value.find((w) => w.id === currentWsId.value) || null)
 
+// Teams: named, coloured groups of agents inside a workspace. Each member pane
+// keeps its team id (leaf.team); saved with the layout.
+const TEAM_COLORS = ['#e0a526', '#3fb6a8', '#c77dd6', '#5b9df5', '#e2724f', '#8fbf4f']
+const teams = ref([]) // [{ id, name, color }]
+
 
 // `tree` and `activeId` always point at the current workspace, so the pane
 // operations below work unchanged.
@@ -456,7 +461,8 @@ function serializeNode(node) {
       sessionId: node.sessionId || null,
       launchedAt: node.launchedAt || null,
       startDir: node.startDir || null,
-      num: node.num || null
+      num: node.num || null,
+      team: node.team || null
     }
   }
   return {
@@ -493,6 +499,7 @@ async function deserializeNode(snap, cwd = null) {
     if (Number.isInteger(snap.num) && snap.num > 0) leaf.num = snap.num
     if (snap.title) leaf.title = snap.title
     leaf.broadcast = snap.broadcast !== false
+    if (typeof snap.team === 'string') leaf.team = snap.team
     return leaf
   }
   const children = []
@@ -535,6 +542,7 @@ function saveLayoutNow() {
       workspaces.value.findIndex((w) => w.id === currentWsId.value)
     ),
     placement: placement.value,
+    teams: teams.value,
     settings: { ...settings },
     workspaces: workspaces.value.map((w) => ({
       id: w.id,
@@ -576,6 +584,7 @@ async function splitLeaf(
 
 function closeLeaf(leafId, opts = {}) {
   const ws = wsOfLeaf(leafId)
+  const hadTeam = !!findLeaf(leafId)?.team
   if (!opts.force && settings.confirmCloseAgent && ws) {
     let leaf = null
     forEachLeaf(ws.tree, (l) => {
@@ -607,6 +616,7 @@ function closeLeaf(leafId, opts = {}) {
       }
     })
   }
+  if (hadTeam) pruneTeams()
 }
 
 async function buildGrid(cols, rows, ws = currentWs.value) {
@@ -832,6 +842,8 @@ provide('panelCtx', {
   voiceLanguages,
   voiceLabel,
   voiceName,
+  teamById,
+  leaveTeam,
   copied: (what) => showToast(`${what} copied.`, { timeout: 2000 })
 })
 
@@ -1958,15 +1970,88 @@ function agentLabel(l) {
   return `#${l.num || '?'} ${l.title}${l.agentId ? ` (${l.agentId})` : ''}`
 }
 
+// --- Teams ----------------------------------------------------------------------
+function isTeam(t) {
+  return (
+    t &&
+    typeof t.id === 'string' &&
+    typeof t.name === 'string' &&
+    typeof t.color === 'string' &&
+    /^#[0-9a-f]{6}$/i.test(t.color)
+  )
+}
+
+function teamById(id) {
+  return (id && teams.value.find((t) => t.id === id)) || null
+}
+
+function teamMembers(teamId) {
+  const out = []
+  forEachWsLeaf((l) => l.team === teamId && out.push(l))
+  return out
+}
+
+// Teams nobody belongs to any more go away.
+function pruneTeams() {
+  const used = new Set()
+  forEachWsLeaf((l) => l.team && used.add(l.team))
+  teams.value = teams.value.filter((t) => used.has(t.id))
+}
+
+function createTeam(leafIds) {
+  const ids = (leafIds || []).filter((id) => findLeaf(id)?.kind === 'agent')
+  if (!ids.length) return null
+  const names = new Set(teams.value.map((t) => t.name))
+  let n = 1
+  while (names.has(`Team ${n}`)) n++
+  const used = new Set(teams.value.map((t) => t.color))
+  const color = TEAM_COLORS.find((c) => !used.has(c)) || TEAM_COLORS[n % TEAM_COLORS.length]
+  const team = { id: newId('team'), name: `Team ${n}`, color }
+  teams.value.push(team)
+  for (const id of ids) findLeaf(id).team = team.id
+  pruneTeams()
+  return team
+}
+
+function renameTeam(teamId, name) {
+  const team = teamById(teamId)
+  const clean = String(name || '')
+    .trim()
+    .slice(0, 40)
+  if (team && clean) team.name = clean
+}
+
+function leaveTeam(leafId) {
+  const leaf = findLeaf(leafId)
+  if (!leaf || !leaf.team) return
+  leaf.team = null
+  pruneTeams()
+}
+
+// "Ungroup": the team goes away, its panes stay where they are.
+function disbandTeam(teamId) {
+  for (const leaf of teamMembers(teamId)) leaf.team = null
+  teams.value = teams.value.filter((t) => t.id !== teamId)
+}
+
+function messageTeam(teamId, text) {
+  const team = teamById(teamId)
+  if (team) messageAgents(teamMembers(teamId), text, team.name)
+}
+
 // Send one message to every agent of a workspace (never to plain shells,
 // which would run it as a command).
 function messageWorkspace(wsId, text) {
   const ws = workspaces.value.find((w) => w.id === wsId)
+  if (ws) messageAgents(wsAgents(wsId), text, ws.name)
+}
+
+function messageAgents(list, text, where) {
   const body = String(text || '').trim()
-  if (!ws || !body) return
-  const agents = wsAgents(wsId)
+  if (!body) return
+  const agents = list.filter((l) => l.kind === 'agent')
   if (!agents.length) {
-    showToast(`${ws.name} has no agent to message.`, { kind: 'error' })
+    showToast(`${where} has no agent to message.`, { kind: 'error' })
     return
   }
   // Agents out of usage would not act on it: skip them and say so.
@@ -2150,6 +2235,7 @@ const sessionItems = computed(() => {
       state,
       reset: limits[leaf.id] ? limits[leaf.id].reset : '',
       held: !!pendingMessages[leaf.id],
+      team: leaf.team || null,
       active: leaf.id === activeId.value
     })
   })
@@ -2307,6 +2393,7 @@ async function restoreOrSeedLayout() {
       saved.settings || (Number.isFinite(saved.fontSize) ? { fontSize: saved.fontSize } : null)
     )
     if (['right', 'down', 'workspace'].includes(saved.placement)) placement.value = saved.placement
+    if (Array.isArray(saved.teams)) teams.value = saved.teams.filter(isTeam)
     // v2 stores a list of workspaces; v1 stored a single tree.
     const snaps = !settings.restoreWorkspaces
       ? []
@@ -2370,6 +2457,7 @@ onMounted(async () => {
   )
 
   // Persist on any structural / size / title / broadcast change (debounced).
+  pruneTeams()
   persistReady = true
   watch(
     [
@@ -2380,7 +2468,8 @@ onMounted(async () => {
       sidebarCollapsed,
       sidebarWidth,
       settings,
-      placement
+      placement,
+      teams
     ],
     scheduleSave,
     {
@@ -2748,6 +2837,11 @@ onBeforeUnmount(() => {
         :width="sidebarWidth"
         :inbox="inboxItems"
         :sessions="sessionItems"
+        :teams="teams"
+        @create-team="createTeam"
+        @rename-team="renameTeam"
+        @disband-team="disbandTeam"
+        @message-team="messageTeam"
         @focus-pane="focusPane"
         @message-ws="messageWorkspace"
         @notes-ws="shareProjectNotes"
