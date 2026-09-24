@@ -13,7 +13,7 @@ describe('cleanEnv', () => {
       CLAUDE_CODE_ENTRYPOINT: 'claude-vscode',
       CLAUDE_PID: '123',
       ELECTRON_RUN_AS_NODE: '1',
-      SP_PTYHOST_TOKEN: 'tok'
+      TESSEL_PTYHOST_TOKEN: 'tok'
     })
     expect(env).toEqual({ Path: 'C:\\Windows' })
   })

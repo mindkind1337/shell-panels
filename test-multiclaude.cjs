@@ -11,7 +11,7 @@ const resizeEvents = []
 const exits = []
 const errors = []
 const ansiEscapePattern = new RegExp(String.raw`\x1b\[[0-9;?]*[A-Za-z]`, 'g')
-const useConpty = process.env.SHELL_PANELS_USE_WINPTY !== '1'
+const useConpty = process.env.TESSEL_USE_WINPTY !== '1'
 let win
 
 const resultPath = path.join(__dirname, 'test-result.txt')

@@ -1,4 +1,4 @@
-# Shell Panels
+# Tessel
 
 A Windows desktop app for running **multiple shells in one window**, split into
 resizable panels, with optional **multi-write (broadcast)** so you can type once
@@ -102,7 +102,7 @@ Build the installer, then run it:
 
 ```sh
 npm install
-npm run dist     # writes dist/Shell-Panels-Setup-<version>.exe
+npm run dist     # writes dist/Tessel-Setup-<version>.exe
 ```
 
 The installer lets you choose the install folder and adds Start menu and
@@ -111,7 +111,7 @@ first time; choose **More info → Run anyway**. `npm run dist:dir` builds an
 unpacked copy in `dist/win-unpacked/` without the installer, which is quicker
 for testing.
 
-Saved workspaces, settings and tasks live in `%APPDATA%\shell-panels`, shared
+Saved workspaces, settings and tasks live in `%APPDATA%\tessel`, shared
 by the installed app and the dev build.
 
 ## Updates
@@ -130,13 +130,13 @@ To publish a release:
 1. Bump `version` in `package.json`.
 2. `npm run dist`
 3. Create a GitHub release tagged `vX.Y.Z` and upload **all three** files from
-   `dist/`: `Shell-Panels-Setup-X.Y.Z.exe`, its `.blockmap`, and `latest.yml`
+   `dist/`: `Tessel-Setup-X.Y.Z.exe`, its `.blockmap`, and `latest.yml`
    (the app reads `latest.yml` to find the new version).
 
 Testing without publishing: create `dev-app-update.yml` (git-ignored) pointing
 at a local feed (`provider: generic`, `url: http://127.0.0.1:8765/`), and start
-a dev build with `SP_UPDATE_TEST=1` (and `SHELL_PANELS_USER_DATA` /
-`SP_PTYHOST_CHANNEL` so it doesn't touch your real app).
+a dev build with `TESSEL_UPDATE_TEST=1` (and `TESSEL_USER_DATA` /
+`TESSEL_PTYHOST_CHANNEL` so it doesn't touch your real app).
 
 ## Run it
 
@@ -147,7 +147,7 @@ npm run dev      # development (hot reload)
 npm run build && npm start   # build, then run the production bundle
 ```
 
-A window titled **Shell Panels** opens with one PowerShell pane.
+A window titled **Tessel** opens with one PowerShell pane.
 
 ## Keyboard shortcuts
 
@@ -191,7 +191,7 @@ Press **F1** in the app for this list.
   redraw correctly on resize the way they do in Windows Terminal, so it is the
   default. ConPTY's teardown is handled carefully — `terminatePty()` sends
   `Ctrl+C` + `exit` and falls back to a `taskkill` tree after a short delay so a
-  pane never wedges the app. Set `SHELL_PANELS_USE_WINPTY=1` to force the older
+  pane never wedges the app. Set `TESSEL_USE_WINPTY=1` to force the older
   WinPTY backend if needed. See `src/main/index.js`.
 - **`ELECTRON_RUN_AS_NODE`.** If this env var is set globally, Electron boots as
   plain Node and no window appears. `launch.mjs` strips it before launching, so

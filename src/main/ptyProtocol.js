@@ -21,5 +21,5 @@ export function trimBuffer(text, max) {
 // separate hosts).
 export function pipeName(user, channel) {
   const safe = (s) => String(s || 'user').replace(/[^A-Za-z0-9_.-]/g, '_')
-  return `\\\\.\\pipe\\shell-panels-${safe(user)}-${safe(channel)}`
+  return `\\\\.\\pipe\\tessel-${safe(user)}-${safe(channel)}`
 }

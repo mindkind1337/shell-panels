@@ -1,6 +1,6 @@
 {
-  "name": "shell-panels",
-  "version": "1.1.0",
+  "name": "tessel",
+  "version": "1.2.0",
   "description": "Split-panel multi-terminal for Windows (Electron + Vue + xterm.js + node-pty)",
   "main": "out/main/index.js",
   "author": "Jean-Claude Trottier",
@@ -46,8 +46,8 @@
     "vue": "^3.5.13"
   },
   "build": {
-    "appId": "com.jeanclaudetrottier.shellpanels",
-    "productName": "Shell Panels",
+    "appId": "com.jeanclaudetrottier.tessel",
+    "productName": "Tessel",
     "copyright": "Copyright (c) 2026 Jean-Claude Trottier",
     "directories": {
       "output": "dist",
@@ -71,7 +71,7 @@
         }
       ],
       "icon": "build/icon.ico",
-      "artifactName": "Shell-Panels-Setup-${version}.${ext}"
+      "artifactName": "Tessel-Setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,
@@ -79,15 +79,15 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Shell Panels",
-      "uninstallDisplayName": "Shell Panels",
+      "shortcutName": "Tessel",
+      "uninstallDisplayName": "Tessel",
       "deleteAppDataOnUninstall": false
     },
     "publish": [
       {
         "provider": "github",
         "owner": "mindkind1337",
-        "repo": "shell-panels",
+        "repo": "tessel",
         "releaseType": "release"
       }
     ]

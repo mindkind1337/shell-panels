@@ -5,7 +5,7 @@
 // silently and relaunches, and the panes reopen where they were (agents resume
 // their conversations).
 //
-// Only the installed app updates itself. SP_UPDATE_TEST=1 lets a dev build
+// Only the installed app updates itself. TESSEL_UPDATE_TEST=1 lets a dev build
 // check too, against dev-app-update.yml (e.g. a local test feed).
 import { app } from 'electron'
 import { autoUpdater } from 'electron-updater'
@@ -33,7 +33,7 @@ export function htmlToText(html) {
 }
 
 export function createUpdater({ log, send, beforeInstall }) {
-  const enabled = app.isPackaged || process.env.SP_UPDATE_TEST === '1'
+  const enabled = app.isPackaged || process.env.TESSEL_UPDATE_TEST === '1'
   let status = { state: enabled ? 'idle' : 'disabled', current: app.getVersion() }
 
   const set = (next) => {

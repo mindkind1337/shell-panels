@@ -58,9 +58,9 @@ function snapshot(entry) {
   })
 }
 
-const PIPE = process.env.SP_PTYHOST_PIPE
-const TOKEN = process.env.SP_PTYHOST_TOKEN
-const LOG_DIR = process.env.SP_LOG_DIR
+const PIPE = process.env.TESSEL_PTYHOST_PIPE
+const TOKEN = process.env.TESSEL_PTYHOST_TOKEN
+const LOG_DIR = process.env.TESSEL_LOG_DIR
 const log = LOG_DIR ? createLogger({ dir: LOG_DIR, name: 'pty-host' }) : null
 const say = (level, msg) => log && log[level]('host', msg)
 

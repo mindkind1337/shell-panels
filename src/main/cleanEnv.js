@@ -1,6 +1,6 @@
-// Environment for the terminals Shell Panels opens.
+// Environment for the terminals Tessel opens.
 //
-// If Shell Panels itself was started from inside an AI agent session (say, a
+// If Tessel itself was started from inside an AI agent session (say, a
 // Claude Code terminal), it inherits that session's private variables. Passed
 // on to every pane they would make a Claude Code started there think it is a
 // sub-session (it then stops saving its conversation, so it can't be resumed)
@@ -27,11 +27,11 @@ const SESSION_VARS = new Set([
   'MCP_CONNECTION_NONBLOCKING',
   'CODEX_SANDBOX',
   'CODEX_SANDBOX_NETWORK_DISABLED',
-  // Shell Panels' own internals.
+  // Tessel' own internals.
   'ELECTRON_RUN_AS_NODE',
-  'SP_PTYHOST_PIPE',
-  'SP_PTYHOST_TOKEN',
-  'SP_LOG_DIR'
+  'TESSEL_PTYHOST_PIPE',
+  'TESSEL_PTYHOST_TOKEN',
+  'TESSEL_LOG_DIR'
 ])
 
 export function isSessionVar(name) {

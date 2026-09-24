@@ -26,15 +26,58 @@ import {
 // PTY registry
 // ---------------------------------------------------------------------------
 /** @type {Map<string, import('node-pty').IPty>} */
-// Pin the data folder (%APPDATA%\shell-panels) so the installed app and the
+// Pin the data folder (%APPDATA%\tessel) so the installed app and the
 // dev build share saved workspaces, settings and tasks, whatever the product
 // name the installer uses.
-// SHELL_PANELS_USER_DATA overrides it (used for testing without touching your
+// TESSEL_USER_DATA overrides it (used for testing without touching your
 // real workspaces).
 app.setPath(
   'userData',
-  process.env.SHELL_PANELS_USER_DATA || join(app.getPath('appData'), 'shell-panels')
+  process.env.TESSEL_USER_DATA || join(app.getPath('appData'), 'tessel')
 )
+
+// The app was called Shell Panels and kept its data in %APPDATA%\shell-panels.
+// On the first start as Tessel, copy it over so workspaces, settings, tasks and
+// saved output carry across. A copy, not a move: the old app may still be open.
+// Skipped: the old terminal host's token (Tessel runs its own host), logs and
+// Chromium caches. Files the old app holds locked are skipped one by one.
+function migrateOldUserData() {
+  if (process.env.TESSEL_USER_DATA) return
+  const from = join(app.getPath('appData'), 'shell-panels')
+  const to = app.getPath('userData')
+  if (fs.existsSync(to) || !fs.existsSync(from)) return
+  const skip = new Set([
+    'pty-host.token',
+    'update-installed.json',
+    'logs',
+    'Cache',
+    'Code Cache',
+    'GPUCache',
+    'DawnGraphiteCache',
+    'DawnWebGPUCache',
+    'lockfile'
+  ])
+  const copyDir = (src, dest) => {
+    fs.mkdirSync(dest, { recursive: true })
+    for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+      if (skip.has(entry.name)) continue
+      const s = join(src, entry.name)
+      const d = join(dest, entry.name)
+      try {
+        if (entry.isDirectory()) copyDir(s, d)
+        else if (entry.isFile()) fs.copyFileSync(s, d)
+      } catch {
+        /* locked or unreadable: skip it */
+      }
+    }
+  }
+  try {
+    copyDir(from, to)
+  } catch {
+    /* best-effort: Tessel starts fresh */
+  }
+}
+migrateOldUserData()
 
 let mainWindow = null
 
@@ -48,11 +91,11 @@ function appIconPath() {
 // installed app uses the installer's id so its Start menu shortcut, taskbar
 // button and notifications line up.
 const APP_ID = app.isPackaged
-  ? 'com.jeanclaudetrottier.shellpanels'
-  : 'com.jeanclaudetrottier.shellpanels.dev2'
+  ? 'com.jeanclaudetrottier.tessel'
+  : 'com.jeanclaudetrottier.tessel.dev'
 if (process.platform === 'win32') app.setAppUserModelId(APP_ID)
 
-// Logs: %APPDATA%\\shell-panels\\logs\\shell-panels.log (rotated, 1 MB x 4).
+// Logs: %APPDATA%\\tessel\\logs\\tessel.log (rotated, 1 MB x 4).
 const log = createLogger({ dir: join(app.getPath('userData'), 'logs') })
 
 // Kept for older call sites: everything it reports is an error.
@@ -183,7 +226,7 @@ const AGENT_PRESETS = [
 ]
 
 // PATH as it is *now* in the registry (machine + user), not as it was when
-// Shell Panels started. Installing an agent, or fixing PATH, then works in new
+// Tessel started. Installing an agent, or fixing PATH, then works in new
 // panes without restarting the app.
 let freshPath = null
 function readFreshPath() {
@@ -215,7 +258,7 @@ function currentPath() {
 // process.env with PATH replaced by the fresh value (Windows env keys are
 // case-insensitive, so replace whichever spelling is present).
 // Environment for terminals and tools: without the variables of whatever
-// agent session launched Shell Panels (see cleanEnv.js), with a fresh PATH.
+// agent session launched Tessel (see cleanEnv.js), with a fresh PATH.
 function freshEnv() {
   const env = cleanEnv(process.env)
   const key = Object.keys(env).find((k) => k.toLowerCase() === 'path') || 'Path'
@@ -277,7 +320,7 @@ function defaultShell() {
 }
 
 function shouldUseConpty() {
-  return process.env.SHELL_PANELS_USE_WINPTY !== '1'
+  return process.env.TESSEL_USE_WINPTY !== '1'
 }
 
 function windowsBuildNumber() {
@@ -405,7 +448,7 @@ ipcMain.handle('logs:open', () => shell.openPath(log.dir))
 // Text to paste into a bug report: versions, system, and the recent log.
 ipcMain.handle('logs:diagnostics', () => {
   const lines = [
-    'Shell Panels diagnostics',
+    'Tessel diagnostics',
     `version: ${app.getVersion()} (${app.isPackaged ? 'installed' : 'dev'})`,
     `electron ${process.versions.electron}, chrome ${process.versions.chrome}, node ${process.versions.node}`,
     `os: ${process.platform} ${os.release()} ${os.arch()}, ${Math.round(os.totalmem() / 1073741824)} GB RAM`,
@@ -539,7 +582,7 @@ ipcMain.on('app:notify', (_evt, { title, body, paneId } = {}) => {
   if (!mainWindow) return
   if (!mainWindow.isFocused()) mainWindow.flashFrame(true)
   if (!Notification.isSupported()) return
-  const n = new Notification({ title: title || 'Shell Panels', body: body || '', silent: false })
+  const n = new Notification({ title: title || 'Tessel', body: body || '', silent: false })
   n.on('click', () => {
     if (!mainWindow) return
     if (mainWindow.isMinimized()) mainWindow.restore()
@@ -652,7 +695,7 @@ function hostToken() {
 
 const hostPipe = pipeName(
   os.userInfo().username,
-  process.env.SP_PTYHOST_CHANNEL || (app.isPackaged ? 'app' : 'dev')
+  process.env.TESSEL_PTYHOST_CHANNEL || (app.isPackaged ? 'app' : 'dev')
 )
 
 // Safety limit: never start more than 3 hosts a minute, whatever goes wrong.
@@ -671,9 +714,9 @@ function startHost() {
     env: {
       ...cleanEnv(process.env),
       ELECTRON_RUN_AS_NODE: '1',
-      SP_PTYHOST_PIPE: hostPipe,
-      SP_PTYHOST_TOKEN: hostToken(),
-      SP_LOG_DIR: log.dir
+      TESSEL_PTYHOST_PIPE: hostPipe,
+      TESSEL_PTYHOST_TOKEN: hostToken(),
+      TESSEL_LOG_DIR: log.dir
     },
     detached: true,
     stdio: 'ignore',
@@ -742,7 +785,7 @@ ipcMain.handle('pty:create', async (_evt, opts = {}) => {
       rows,
       useConpty,
       // ConPTY is required for full-screen TUIs like Claude Code to redraw on
-      // resize. Set SHELL_PANELS_USE_WINPTY=1 only as a fallback.
+      // resize. Set TESSEL_USE_WINPTY=1 only as a fallback.
       meta: { shellId: shell.id, shellName: shell.name, backend, cwd: startDir }
     })
   } catch (err) {
@@ -918,7 +961,7 @@ function createWindow() {
     minWidth: 640,
     minHeight: 400,
     backgroundColor: '#101216',
-    title: 'Shell Panels',
+    title: 'Tessel',
     autoHideMenuBar: true,
     // Merge the title bar and our toolbar into one unified bar: hide the native
     // frame but overlay the Windows min/max/close buttons on top of our bar.
@@ -945,7 +988,7 @@ function createWindow() {
       appId: APP_ID,
       appIconPath: appIconPath(),
       appIconIndex: 0,
-      relaunchDisplayName: 'Shell Panels (dev)'
+      relaunchDisplayName: 'Tessel (dev)'
     })
   }
   // Never open pages inside the app window: send them to the system browser
@@ -1006,7 +1049,7 @@ function ensureDevShortcut() {
     icon,
     iconIndex: 0,
     appUserModelId: APP_ID,
-    description: 'Shell Panels (development build)'
+    description: 'Tessel (development build)'
   }
   let repaired = false
   const write = (file) => {
@@ -1016,7 +1059,13 @@ function ensureDevShortcut() {
       log.warn('app', `dev shortcut ${file} failed: ${err.message}`)
     }
   }
-  write(join(programs, 'Shell Panels (dev).lnk'))
+  write(join(programs, 'Tessel (dev).lnk'))
+  // Left over from before the rename to Tessel.
+  try {
+    fs.rmSync(join(programs, 'Shell Panels (dev).lnk'), { force: true })
+  } catch {
+    /* best-effort */
+  }
   // Electron (re)creates "Electron.lnk" with Electron's icon and our id each
   // time a notification is shown and the file is missing. Deleting it only
   // lasts until the next notification, so keep it, with our icon instead.
@@ -1025,7 +1074,7 @@ function ensureDevShortcut() {
     if (fs.existsSync(electronLnk)) {
       const link = shell.readShortcutLink(electronLnk)
       const ours = String(link.appUserModelId || '').startsWith(
-        'com.jeanclaudetrottier.shellpanels'
+        'com.jeanclaudetrottier.tessel'
       )
       if (ours && link.icon !== icon) {
         write(electronLnk)
@@ -1053,14 +1102,14 @@ function ensureDevShortcut() {
 }
 
 // One running copy at a time. The dev build and the installed app share the
-// same saved data (%APPDATA%\shell-panels); two copies at once would overwrite
+// same saved data (%APPDATA%\tessel); two copies at once would overwrite
 // each other's layout and saved output. Opening a second copy focuses the
-// first instead. (SHELL_PANELS_USER_DATA gives tests their own data, so they
+// first instead. (TESSEL_USER_DATA gives tests their own data, so they
 // get their own lock.)
 const gotInstanceLock = app.requestSingleInstanceLock()
 if (!gotInstanceLock) {
   // Quit without touching the terminal host: it belongs to the running copy.
-  log.info('app', 'another Shell Panels is already running: focusing it and exiting')
+  log.info('app', 'another Tessel is already running: focusing it and exiting')
   shutdownDone = true
   app.quit()
 } else {

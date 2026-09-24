@@ -168,7 +168,7 @@ function run(file, args, opts = {}) {
 
 // Run an agent CLI through PowerShell so .cmd/.ps1 shims resolve, with PATH
 // re-read from the registry (so a PATH change takes effect without restarting
-// Shell Panels). Arguments are passed as single-quoted literals.
+// Tessel). Arguments are passed as single-quoted literals.
 function runAgentCli(exe, args, cwd) {
   if (process.platform !== 'win32') return run(exe, args, { cwd })
   const script = [
@@ -464,7 +464,7 @@ const MCP_INIT = {
   params: {
     protocolVersion: '2025-06-18',
     capabilities: {},
-    clientInfo: { name: 'shell-panels', version: '1.0.0' }
+    clientInfo: { name: 'tessel', version: '1.0.0' }
   }
 }
 

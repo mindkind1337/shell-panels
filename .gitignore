@@ -7,7 +7,7 @@ dist/
 
 # Logs & test artifacts
 *.log
-shell-panels-crash.log
+tessel-crash.log
 test-result.txt
 
 # Editor / OS

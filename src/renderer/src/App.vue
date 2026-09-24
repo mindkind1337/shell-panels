@@ -765,7 +765,7 @@ async function initUpdates() {
     const wasReady = updateStatus.value.state === 'ready'
     updateStatus.value = s
     if (s.state === 'ready' && !wasReady) {
-      showToast(`Shell Panels ${s.version} is ready to install.`, {
+      showToast(`Tessel ${s.version} is ready to install.`, {
         kind: 'attention',
         timeout: 15000,
         action: { label: 'Update', run: () => (updateOpen.value = true) }
@@ -775,7 +775,7 @@ async function initUpdates() {
   updateStatus.value = await api.status()
   const done = await api.justInstalled()
   if (done) {
-    showToast(`Updated to Shell Panels ${done.to}. Your panes were restored.`, {
+    showToast(`Updated to Tessel ${done.to}. Your panes were restored.`, {
       timeout: 8000
     })
   }
@@ -1021,7 +1021,7 @@ async function voiceTyping(paneId) {
   const ta = document.querySelector('.ws-layer:not(.hidden) .pane.active .xterm-helper-textarea')
   if (ta) ta.focus()
   if (!window.shellApi.voiceTyping) {
-    showToast('Restart Shell Panels to enable voice typing, or press Win+H.', { kind: 'error' })
+    showToast('Restart Tessel to enable voice typing, or press Win+H.', { kind: 'error' })
     return
   }
   const ok = await window.shellApi.voiceTyping({ tip: settings.voiceTip || null })
@@ -1065,7 +1065,7 @@ async function checkWorktree() {
     return
   }
   if (!window.shellApi.gitInfo) {
-    worktreeState.reason = 'Restart Shell Panels to enable this'
+    worktreeState.reason = 'Restart Tessel to enable this'
     return
   }
   worktreeState.checking = true
@@ -1200,12 +1200,12 @@ function closeMcp() {
 
 function openLogs() {
   if (window.shellApi.openLogs) window.shellApi.openLogs()
-  else showToast('Restart Shell Panels to enable logs.', { kind: 'error' })
+  else showToast('Restart Tessel to enable logs.', { kind: 'error' })
 }
 
 async function copyDiagnostics() {
   if (!window.shellApi.diagnostics) {
-    showToast('Restart Shell Panels to enable diagnostics.', { kind: 'error' })
+    showToast('Restart Tessel to enable diagnostics.', { kind: 'error' })
     return
   }
   const text = await window.shellApi.diagnostics()
@@ -1559,7 +1559,7 @@ async function setWorkspaceFolder(id) {
   const ws = workspaces.value.find((w) => w.id === id)
   if (!ws) return
   if (!window.shellApi.pickFolder) {
-    showToast('Restart Shell Panels to enable project folders.', { kind: 'error' })
+    showToast('Restart Tessel to enable project folders.', { kind: 'error' })
     return
   }
   const picked = await window.shellApi.pickFolder({
@@ -2263,7 +2263,7 @@ onBeforeUnmount(() => {
       <button
         v-if="updateStatus.state === 'ready'"
         class="tb-update"
-        :title="`Shell Panels ${updateStatus.version} is ready: restart to update`"
+        :title="`Tessel ${updateStatus.version} is ready: restart to update`"
         @click="updateOpen = true"
       >
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">

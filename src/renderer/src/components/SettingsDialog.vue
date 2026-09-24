@@ -241,7 +241,7 @@ const CURSORS = [
         <h3>Updates</h3>
         <div class="set-row">
           <div class="set-label">
-            Shell Panels {{ updateStatus.current || '' }}
+            Tessel {{ updateStatus.current || '' }}
             <span class="set-hint">{{ updateText(updateStatus) }}</span>
           </div>
           <button

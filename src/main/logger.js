@@ -1,7 +1,7 @@
 // Small file logger for diagnosing problems after the fact.
 //
-//   %APPDATA%\shell-panels\logs\shell-panels.log   (current)
-//   shell-panels.1.log ... shell-panels.3.log       (older, rotated at 1 MB)
+//   %APPDATA%\tessel\logs\tessel.log   (current)
+//   tessel.1.log ... tessel.3.log       (older, rotated at 1 MB)
 //
 // Lines look like:
 //   2026-09-24T16:20:01.123Z ERROR [main] pty:create failed: ...
@@ -13,7 +13,7 @@ const LEVELS = ['debug', 'info', 'warn', 'error']
 
 export function createLogger({
   dir,
-  name = 'shell-panels',
+  name = 'tessel',
   maxBytes = 1024 * 1024,
   keep = 3,
   minLevel = 'info'

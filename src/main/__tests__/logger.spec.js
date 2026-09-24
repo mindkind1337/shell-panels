@@ -35,7 +35,7 @@ describe('createLogger', () => {
     const log = createLogger({ dir, maxBytes: 200, keep: 2 })
     for (let i = 0; i < 40; i++) log.info('main', `line ${i} ${'x'.repeat(30)}`)
     const files = fs.readdirSync(dir).sort()
-    expect(files).toEqual(['shell-panels.1.log', 'shell-panels.2.log', 'shell-panels.log'])
+    expect(files).toEqual(['tessel.1.log', 'tessel.2.log', 'tessel.log'])
     for (const f of files) expect(fs.statSync(join(dir, f)).size).toBeLessThan(400)
     expect(fs.readFileSync(log.file, 'utf8')).toContain('line 39')
   })

@@ -21,12 +21,12 @@ onMounted(() => {
       ref="cardEl"
       class="help-card update-card"
       role="dialog"
-      aria-label="Update Shell Panels"
+      aria-label="Update Tessel"
       tabindex="-1"
       @keydown.escape.prevent.stop="!installing && emit('close')"
     >
       <div class="help-head">
-        <span>Update to Shell Panels {{ status.version }}</span>
+        <span>Update to Tessel {{ status.version }}</span>
       </div>
 
       <p class="update-line">
@@ -36,7 +36,7 @@ onMounted(() => {
       <pre v-if="status.notes" class="update-notes">{{ status.notes }}</pre>
 
       <p class="update-line">
-        Shell Panels will close, install the update and open again.
+        Tessel will close, install the update and open again.
         <template v-if="panes">
           Your {{ panes }} {{ panes === 1 ? 'pane reopens' : 'panes reopen' }} where
           {{ panes === 1 ? 'it was' : 'they were' }}, with their recent output, and Claude and Codex

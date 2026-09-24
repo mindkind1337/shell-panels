@@ -7,7 +7,7 @@ import { startCapture } from './ptyStore'
 // Begin buffering PTY output before any pane mounts so nothing is lost.
 startCapture()
 
-// Send interface errors to the app log (%APPDATA%\\shell-panels\\logs).
+// Send interface errors to the app log (%APPDATA%\\tessel\\logs).
 function report(level, value) {
   try {
     const text =
@@ -39,7 +39,7 @@ function showCrash(err) {
   const box = document.createElement('div')
   box.className = 'crash-screen'
   const title = document.createElement('h1')
-  title.textContent = 'Shell Panels hit a problem'
+  title.textContent = 'Tessel hit a problem'
   const text = document.createElement('p')
   text.textContent =
     'The window could not finish loading. Your workspaces are saved. Reload to try again.'
