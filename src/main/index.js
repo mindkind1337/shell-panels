@@ -455,14 +455,24 @@ ipcMain.handle('notes:open', async (_evt, opts) => {
   const res = ensureNotes(opts)
   if (!res.ok) return res
   const err = await shell.openPath(res.path)
-  if (err) {
+  if (!err) return res
+  // No app for .md files: Notepad. A failed start is reported through the
+  // child's 'error' event, after spawn() returns, so wait for it.
+  return new Promise((resolve) => {
     try {
-      spawn('notepad.exe', [res.path], { detached: true, stdio: 'ignore' }).unref()
+      const child = spawn('notepad.exe', [res.path], { detached: true, stdio: 'ignore' })
+      child.once('error', (e) => {
+        log.warn('notes', `could not open ${res.path}: ${e.message}`)
+        resolve({ ok: false, error: `Could not open the notes: ${e.message}` })
+      })
+      child.once('spawn', () => {
+        child.unref()
+        resolve(res)
+      })
     } catch (e) {
-      return { ok: false, error: e.message }
+      resolve({ ok: false, error: e.message })
     }
-  }
-  return res
+  })
 })
 
 ipcMain.handle('app:homeDir', () => os.homedir())

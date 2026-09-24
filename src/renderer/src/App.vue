@@ -584,7 +584,9 @@ async function splitLeaf(
 
 function closeLeaf(leafId, opts = {}) {
   const ws = wsOfLeaf(leafId)
-  const hadTeam = !!findLeaf(leafId)?.team
+  const closing = findLeaf(leafId)
+  const hadTeam = closing?.team || null
+  const closingTitle = closing?.title || 'An agent'
   if (!opts.force && settings.confirmCloseAgent && ws) {
     let leaf = null
     forEachLeaf(ws.tree, (l) => {
@@ -616,7 +618,11 @@ function closeLeaf(leafId, opts = {}) {
       }
     })
   }
-  if (hadTeam) pruneTeams()
+  if (hadTeam) {
+    pruneTeams()
+    // Its teammates hear it is gone, as with "Leave".
+    if (teamById(hadTeam)) tellTeam(hadTeam, `${closingTitle} was closed and left the team.`)
+  }
 }
 
 async function buildGrid(cols, rows, ws = currentWs.value) {
