@@ -27,6 +27,7 @@ const emit = defineEmits([
   'message-ws',
   'notes-ws',
   'create-team',
+  'add-to-team',
   'rename-team',
   'disband-team',
   'message-team',
@@ -198,13 +199,26 @@ const rows = computed(() => {
   return out
 })
 
-// "New team": tick agents, then group them.
-const picking = ref(false)
+// Tick agents, then group them into a new team ('new') or add them to a
+// team (its id). Only agents in no team can be ticked: moving one to another
+// team goes through "Leave" first, so no team changes by surprise.
+const picking = ref(false) // false | 'new' | team id
 const picked = ref([])
+const pickTeam = computed(() =>
+  picking.value && picking.value !== 'new' ? props.teams.find((t) => t.id === picking.value) || null : null
+)
 
-function startPicking() {
-  picking.value = !picking.value
+function startPicking(target = 'new') {
+  picking.value = picking.value === target ? false : target
   picked.value = []
+}
+
+function canPick(x) {
+  return x.kind === 'agent' && !x.team
+}
+
+function teamName(id) {
+  return props.teams.find((t) => t.id === id)?.name || 'a team'
 }
 
 function togglePicked(id) {
@@ -214,14 +228,17 @@ function togglePicked(id) {
 }
 
 function groupPicked() {
-  if (picked.value.length) emit('create-team', picked.value.slice())
+  if (picked.value.length) {
+    if (pickTeam.value) emit('add-to-team', pickTeam.value.id, picked.value.slice())
+    else emit('create-team', picked.value.slice())
+  }
   picking.value = false
   picked.value = []
 }
 
 function onSession(x) {
   if (picking.value) {
-    if (x.kind === 'agent') togglePicked(x.id)
+    if (canPick(x)) togglePicked(x.id)
   } else emit('focus-pane', x.id)
 }
 
@@ -451,10 +468,10 @@ defineExpose({
         <template v-if="sessions.some((s) => s.kind === 'agent')">
           <button
             class="ws-icon-btn ws-head-new"
-            :class="{ on: picking }"
+            :class="{ on: picking === 'new' }"
             title="New team: tick the agents that work together"
             aria-label="New team"
-            @click="startPicking"
+            @click="startPicking('new')"
           >
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
               <circle cx="5.5" cy="5.5" r="2.2" stroke="currentColor" stroke-width="1.3" />
@@ -559,6 +576,17 @@ defineExpose({
           <span class="ws-team-count">{{ r.count }}</span>
           <button
             class="ws-icon-btn small"
+            :class="{ on: picking === r.team.id }"
+            :title="`Add agents to ${r.team.name}`"
+            aria-label="Add agents to the team"
+            @click="startPicking(r.team.id)"
+          >
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+            </svg>
+          </button>
+          <button
+            class="ws-icon-btn small"
             :class="{ on: messagingId === 'team:' + r.team.id }"
             :title="`Message ${r.team.name}: one message to each of its agents`"
             aria-label="Message the team"
@@ -624,11 +652,19 @@ defineExpose({
               active: r.s.active && !picking,
               'in-team': !!r.team,
               picked: picked.includes(r.s.id),
-              unpickable: picking && r.s.kind !== 'agent'
+              unpickable: picking && !canPick(r.s)
             }
           ]"
           :style="r.team ? { '--team': r.team.color } : null"
-          :title="picking ? (r.s.kind === 'agent' ? 'Tick to put in the team' : 'Terminals cannot be in a team') : `Go to pane ${r.s.num || ''}`"
+          :title="
+            !picking
+              ? `Go to pane ${r.s.num || ''}`
+              : r.s.kind !== 'agent'
+                ? 'Terminals cannot be in a team'
+                : r.s.team
+                  ? `Already in ${teamName(r.s.team)}. To move it, use Leave in its ⋯ menu first.`
+                  : 'Tick to put it in the team'
+          "
           @click="onSession(r.s)"
         >
           <span v-if="picking" class="ws-pick-box" :class="{ on: picked.includes(r.s.id) }"></span>
@@ -640,17 +676,27 @@ defineExpose({
           />
           <span class="ws-session-body">
             <span class="ws-session-name">{{ r.s.title }}</span>
-            <span class="ws-session-state">{{ stateText(r.s) }}</span>
+            <span class="ws-session-state">{{
+              picking && r.s.kind === 'agent' && r.s.team ? `In ${teamName(r.s.team)}` : stateText(r.s)
+            }}</span>
           </span>
           <span class="ws-session-num">{{ r.s.num }}</span>
         </button>
       </template>
       <div v-if="picking" class="ws-pick-bar">
-        <span>{{ picked.length ? `${picked.length} selected` : 'Tick the agents that work together' }}</span>
+        <span>{{
+          picked.length
+            ? `${picked.length} selected`
+            : sessions.some(canPick)
+              ? pickTeam
+                ? `Tick the agents to add to ${pickTeam.name}`
+                : 'Tick the agents that work together'
+              : 'Every agent here is already in a team. Use Leave in an agent’s ⋯ menu to free it.'
+        }}</span>
         <div class="ws-message-actions">
           <button class="ws-message-cancel" @click="startPicking">Cancel</button>
           <button class="ws-message-send" :disabled="!picked.length" @click="groupPicked">
-            Group as a team
+            {{ pickTeam ? `Add to ${pickTeam.name}` : 'Group as a team' }}
           </button>
         </div>
       </div>

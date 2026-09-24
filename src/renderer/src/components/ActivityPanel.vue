@@ -167,6 +167,7 @@ function describe(x) {
     case 'team': {
       const what = {
         created: `created team “${x.name}”${x.detail ? ` with ${x.detail}` : ''}`,
+        joined: `${x.detail} joined “${x.name}”`,
         renamed: `renamed team “${x.detail}” to “${x.name}”`,
         left: `${x.detail} left “${x.name}”`,
         closed: `${x.detail} was closed and left “${x.name}”`,

@@ -2159,7 +2159,7 @@ function pruneTeams() {
 }
 
 function createTeam(leafIds) {
-  const ids = (leafIds || []).filter((id) => findLeaf(id)?.kind === 'agent')
+  const ids = (leafIds || []).filter((id) => findLeaf(id)?.kind === 'agent' && !findLeaf(id).team)
   if (!ids.length) return null
   const names = new Set(teams.value.map((t) => t.name))
   let n = 1
@@ -2190,6 +2190,25 @@ function createTeam(leafIds) {
   })
   tellTeam(team.id, null, { welcome: true })
   return team
+}
+
+// Add free agents to a team: they get the welcome, the others hear who joined.
+function addToTeam(teamId, leafIds) {
+  const team = teamById(teamId)
+  if (!team) return
+  const joining = (leafIds || []).map(findLeaf).filter((l) => l && l.kind === 'agent' && !l.team)
+  if (!joining.length) return
+  const before = teamMembers(teamId)
+  for (const leaf of joining) {
+    leaf.team = teamId
+    logMembership(leaf, teamId)
+  }
+  const names = joining.map((l) => l.title).join(', ')
+  recordActivity({ type: 'team', action: 'joined', teamId, wsId: teamWsId(teamId), name: team.name, detail: names })
+  if (before.length) {
+    tellAgents(before, `[Tessel] Team "${team.name}": ${names} joined the team.`, teamId)
+  }
+  tellTeam(teamId, null, { welcome: true, only: joining.map((l) => l.id) })
 }
 
 function renameTeam(teamId, name) {
@@ -2254,6 +2273,7 @@ async function tellTeam(teamId, text, opts = {}) {
     if (res && res.ok) notes = res.path
   }
   for (const leaf of members) {
+    if (opts.only && !opts.only.includes(leaf.id)) continue
     const mates = members.filter((l) => l.id !== leaf.id).map(agentLabel)
     tellAgents(
       [leaf],
@@ -2266,7 +2286,7 @@ async function tellTeam(teamId, text, opts = {}) {
       teamId
     )
   }
-  const told = members.filter((l) => !limits[l.id]).length
+  const told = members.filter((l) => !limits[l.id] && (!opts.only || opts.only.includes(l.id))).length
   showToast(`Told ${told} ${told === 1 ? 'agent' : 'agents'} they are in ${team.name}.`, {
     timeout: 3000
   })
@@ -3111,6 +3131,7 @@ onBeforeUnmount(() => {
         :sessions="sessionItems"
         :teams="teams"
         @create-team="createTeam"
+        @add-to-team="addToTeam"
         @rename-team="renameTeam"
         @disband-team="disbandTeam"
         @message-team="messageTeam"
