@@ -430,7 +430,7 @@ ipcMain.handle('dialog:pickFolder', async (_evt, opts = {}) => {
 // Created once from the renderer's template; an existing file (agents write
 // in it) is never overwritten. Resolves to { ok, path, created } or
 // { ok: false, error }.
-ipcMain.handle('notes:ensure', (_evt, opts = {}) => {
+function ensureNotes(opts = {}) {
   try {
     const dir = String(opts.dir || '')
     if (!isAbsolute(dir) || !fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
@@ -446,6 +446,23 @@ ipcMain.handle('notes:ensure', (_evt, opts = {}) => {
     log.warn('notes', `notes file: ${err.message}`)
     return { ok: false, error: err.message }
   }
+}
+ipcMain.handle('notes:ensure', (_evt, opts) => ensureNotes(opts))
+
+// Open the project notes for the user (created first if missing), in the app
+// Windows associates with .md files, else Notepad.
+ipcMain.handle('notes:open', async (_evt, opts) => {
+  const res = ensureNotes(opts)
+  if (!res.ok) return res
+  const err = await shell.openPath(res.path)
+  if (err) {
+    try {
+      spawn('notepad.exe', [res.path], { detached: true, stdio: 'ignore' }).unref()
+    } catch (e) {
+      return { ok: false, error: e.message }
+    }
+  }
+  return res
 })
 
 ipcMain.handle('app:homeDir', () => os.homedir())

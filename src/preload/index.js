@@ -20,6 +20,7 @@ const api = {
 
   pickFolder: (opts) => ipcRenderer.invoke('dialog:pickFolder', opts),
   projectNotes: (opts) => ipcRenderer.invoke('notes:ensure', opts),
+  openProjectNotes: (opts) => ipcRenderer.invoke('notes:open', opts),
   homeDir: () => ipcRenderer.invoke('app:homeDir'),
   systemLocale: () => ipcRenderer.invoke('app:systemLocale'),
   log: (level, message) => ipcRenderer.send('log:write', { level, message }),

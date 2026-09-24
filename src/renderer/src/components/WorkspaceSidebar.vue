@@ -484,8 +484,8 @@ defineExpose({
           </button>
           <button
             class="ws-icon-btn"
-            title="Project notes: a shared notes file for the agents of this workspace"
-            aria-label="Project notes"
+            title="Project notes: open the notes file the agents of this workspace share"
+            aria-label="Open project notes"
             @click="emit('notes-ws', currentId)"
           >
             <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
