@@ -1,5 +1,7 @@
 # Tessel
 
+_Formerly **Shell Panels**._
+
 A Windows desktop app for running **multiple shells in one window**, split into
 resizable panels, with optional **multi-write (broadcast)** so you can type once
 and drive every pane at the same time.
@@ -113,6 +115,12 @@ for testing.
 
 Saved workspaces, settings and tasks live in `%APPDATA%\tessel`, shared
 by the installed app and the dev build.
+
+**Coming from Shell Panels?** Tessel is a separate app (new app id), so it
+installs next to Shell Panels instead of replacing it. On its first start it
+copies your workspaces, settings, tasks and saved terminal output from
+`%APPDATA%\shell-panels`. Once you have moved over, uninstall Shell Panels
+from Windows Settings → Apps.
 
 ## Updates
 
