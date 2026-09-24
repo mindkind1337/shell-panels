@@ -20,9 +20,11 @@ import {
   attention,
   limits,
   setLimit,
-  clearLimit
+  clearLimit,
+  setApproval,
+  approvals
 } from '../agentStatus'
-import { detectLimit } from '../agentLimit'
+import { detectLimit, detectApproval } from '../agentLimit'
 
 const props = defineProps({
   node: { type: Object, required: true }
@@ -63,8 +65,13 @@ function markActivity() {
   statusTimer = setTimeout(() => {
     agentStatus.value = 'idle'
     const worked = Date.now() - busySince - IDLE_AFTER_MS
+    const screen = screenText(12)
+    // Waiting for you to approve a command or an edit: not "finished".
+    const asks = detectApproval(screen)
+    setApproval(props.node.id, asks)
+    if (asks) return
     // Stopped because it hit its usage limit? Say so instead of "finished".
-    const hit = detectLimit(screenText(12))
+    const hit = detectLimit(screen)
     if (hit) {
       const isNew = !limits[props.node.id]
       setLimit(props.node.id, hit)
@@ -98,28 +105,7 @@ function screenText(lines = 20) {
 const needsYou = computed(() => !!attention[props.node.id])
 const limit = computed(() => limits[props.node.id] || null)
 
-// The team this pane belongs to (agents working together), if any.
-const team = computed(() => ctx.teamById(props.node.team))
-const otherTeams = computed(() => ctx.teams.value.filter((t) => t.id !== props.node.team))
-const paneStyle = computed(() => {
-  const style = {}
-  if (isAgent.value) style['--accent'] = props.node.accent
-  if (team.value) style['--team'] = team.value.color
-  return style
-})
-
-function menuTeam(action, teamId) {
-  closeCtxMenu()
-  const id = props.node.id
-  if (action === 'new') ctx.newTeam([id])
-  else if (action === 'join') ctx.joinTeam(id, teamId)
-  else if (action === 'leave') ctx.leaveTeam(id)
-  else if (action === 'gather') ctx.gatherTeam(teamId)
-  else if (action === 'disband') ctx.disbandTeam(teamId)
-  else if (action === 'rename') ctx.startTeamRename(teamId)
-  else if (action === 'message') ctx.startTeamMessage(teamId)
-  else if (action === 'brief') ctx.briefTeam(teamId)
-}
+const asksApproval = computed(() => !!approvals[props.node.id])
 
 function acknowledge() {
   clearAttention(props.node.id)
@@ -869,10 +855,9 @@ onBeforeUnmount(() => {
       agent: isAgent,
       'needs-you': needsYou,
       highlighted: ctx.highlightId.value === node.id,
-      'in-team': !!team,
       dropping
     }"
-    :style="paneStyle"
+    :style="isAgent ? { '--accent': node.accent } : null"
     :data-pane-id="node.id"
     @mousedown="focusTerm"
     @contextmenu="onContextMenu"
@@ -947,13 +932,13 @@ onBeforeUnmount(() => {
           {{ node.worktree.branch }}
         </span>
         <span
-          v-if="team"
-          class="pane-team"
-          :title="`Team: ${team.name}. Manage it under Teams in the sidebar or in the ⋯ menu.`"
-          >{{ team.name }}</span
+          v-if="isAgent && asksApproval"
+          class="pane-approval"
+          title="This agent is asking you to approve something"
+          >approve?</span
         >
         <span
-          v-if="isAgent && limit"
+          v-else-if="isAgent && limit"
           class="pane-limit"
           :title="
             limit.reset
@@ -1308,41 +1293,6 @@ onBeforeUnmount(() => {
         </template>
         <div class="ctx-menu-sep"></div>
       </template>
-      <template v-if="team">
-        <div class="ctx-menu-label">
-          <span class="team-dot" :style="{ '--team': team.color }"></span>{{ team.name }}
-        </div>
-        <button class="ctx-menu-item" @click="menuTeam('message', team.id)">
-          Message the team…<span class="ctx-menu-shortcut">every agent</span>
-        </button>
-        <button class="ctx-menu-item" @click="menuTeam('brief', team.id)">
-          Brief the team<span class="ctx-menu-shortcut">shared notes</span>
-        </button>
-        <button class="ctx-menu-item" @click="menuTeam('gather', team.id)">
-          Gather the team<span class="ctx-menu-shortcut">side by side</span>
-        </button>
-        <button class="ctx-menu-item" @click="menuTeam('rename', team.id)">Rename the team…</button>
-        <button class="ctx-menu-item" @click="menuTeam('leave')">Leave the team</button>
-        <button class="ctx-menu-item" @click="menuTeam('disband', team.id)">
-          Disband the team<span class="ctx-menu-shortcut">panes stay</span>
-        </button>
-      </template>
-      <template v-else>
-        <div class="ctx-menu-label">Team</div>
-        <button class="ctx-menu-item" @click="menuTeam('new')">New team with this pane</button>
-      </template>
-      <button
-        v-for="t in otherTeams"
-        :key="'team-' + t.id"
-        class="ctx-menu-item"
-        @click="menuTeam('join', t.id)"
-      >
-        <span class="ctx-with-icon">
-          <span class="team-dot" :style="{ '--team': t.color }"></span>{{ team ? 'Move to' : 'Join' }}
-          {{ t.name }}
-        </span>
-      </button>
-      <div class="ctx-menu-sep"></div>
       <button class="ctx-menu-item" @click="menuOpenHere">Open terminal or agent here…</button>
       <button class="ctx-menu-item" @click="menuSplit('row')">
         Split right<span class="ctx-menu-shortcut">▥</span>

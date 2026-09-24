@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { detectLimit } from '../agentLimit'
+import { detectLimit, detectApproval } from '../agentLimit'
 
 describe('detectLimit', () => {
   it('spots Codex hitting its limit and the reset time', () => {
@@ -33,5 +33,18 @@ https://chatgpt.com/codex/settings/usage to purchase more credits or try again a
     expect(detectLimit('I can detect when the other agent hits its usage limit.')).toBeNull()
     expect(detectLimit('Rate limits apply to the API; see the docs.')).toBeNull()
     expect(detectLimit('')).toBeNull()
+  })
+})
+
+describe('detectApproval', () => {
+  it('spots approval prompts', () => {
+    expect(detectApproval('  Would you like to run the following command?\n  $ npm ci')).toBe(true)
+    expect(detectApproval('Do you want to proceed?\n❯ 1. Yes')).toBe(true)
+    expect(detectApproval('Press enter to confirm or esc to cancel')).toBe(true)
+  })
+
+  it('ignores ordinary output', () => {
+    expect(detectApproval('Ran npm test: 120 passed')).toBe(false)
+    expect(detectApproval('')).toBe(false)
   })
 })

@@ -39,3 +39,12 @@ export function detectLimit(text) {
   }
   return { reset: '' }
 }
+
+// What agent CLIs show while they wait for the user to approve something
+// (Codex, Claude Code, Gemini). Typing into such a prompt could answer it.
+const APPROVAL_PATTERNS =
+  /Would you like to (run|make|apply)|Press enter to confirm|Do you want to (proceed|make|create|allow|run)|Allow execution|Apply this change|\(y\/n\)|\[y\/N\]/i
+
+export function detectApproval(text) {
+  return APPROVAL_PATTERNS.test(String(text || ''))
+}

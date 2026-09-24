@@ -15,7 +15,15 @@ import ToolsDialog from './components/ToolsDialog.vue'
 import SessionsDialog from './components/SessionsDialog.vue'
 import { getPane } from './paneRegistry'
 import { chainCommands } from './shellChain'
-import { agentStatus, attention, limits, clearAgentStatus, clearAttention } from './agentStatus'
+import {
+  agentStatus,
+  attention,
+  limits,
+  approvals,
+  clearAgentStatus,
+  clearAttention
+} from './agentStatus'
+import { detectApproval } from './agentLimit'
 import { dropBuffer, seedBuffer } from './ptyStore'
 import { tasks as boardTasks, setTasks, updateTask, removeTask } from './taskBoardStore'
 
@@ -121,9 +129,6 @@ function runToastAction(t) {
 const sidebarEl = ref(null)
 const currentWs = computed(() => workspaces.value.find((w) => w.id === currentWsId.value) || null)
 
-// Teams of agents working together (see "Teams" below).
-const TEAM_COLORS = ['#e0a526', '#3fb6a8', '#c77dd6', '#5b9df5', '#e2724f', '#8fbf4f']
-const teams = ref([]) // [{ id, name, color }]
 
 // `tree` and `activeId` always point at the current workspace, so the pane
 // operations below work unchanged.
@@ -451,8 +456,7 @@ function serializeNode(node) {
       sessionId: node.sessionId || null,
       launchedAt: node.launchedAt || null,
       startDir: node.startDir || null,
-      num: node.num || null,
-      team: node.team || null
+      num: node.num || null
     }
   }
   return {
@@ -489,7 +493,6 @@ async function deserializeNode(snap, cwd = null) {
     if (Number.isInteger(snap.num) && snap.num > 0) leaf.num = snap.num
     if (snap.title) leaf.title = snap.title
     leaf.broadcast = snap.broadcast !== false
-    if (typeof snap.team === 'string') leaf.team = snap.team
     return leaf
   }
   const children = []
@@ -532,7 +535,6 @@ function saveLayoutNow() {
       workspaces.value.findIndex((w) => w.id === currentWsId.value)
     ),
     placement: placement.value,
-    teams: teams.value,
     settings: { ...settings },
     workspaces: workspaces.value.map((w) => ({
       id: w.id,
@@ -574,7 +576,6 @@ async function splitLeaf(
 
 function closeLeaf(leafId, opts = {}) {
   const ws = wsOfLeaf(leafId)
-  const hadTeam = !!findLeaf(leafId)?.team
   if (!opts.force && settings.confirmCloseAgent && ws) {
     let leaf = null
     forEachLeaf(ws.tree, (l) => {
@@ -606,7 +607,6 @@ function closeLeaf(leafId, opts = {}) {
       }
     })
   }
-  if (hadTeam) pruneTeams()
 }
 
 async function buildGrid(cols, rows, ws = currentWs.value) {
@@ -807,8 +807,6 @@ async function initUpdates() {
   }
 }
 
-// Declared before provide('panelCtx') reads it; the team helpers live further down.
-
 provide('panelCtx', {
   broadcast,
   activeId,
@@ -834,16 +832,6 @@ provide('panelCtx', {
   voiceLanguages,
   voiceLabel,
   voiceName,
-  teams,
-  teamById,
-  newTeam,
-  joinTeam,
-  leaveTeam,
-  gatherTeam,
-  disbandTeam,
-  startTeamRename,
-  startTeamMessage,
-  briefTeam,
   copied: (what) => showToast(`${what} copied.`, { timeout: 2000 })
 })
 
@@ -929,30 +917,14 @@ function buildCommands() {
     }
   )
 
-  const active = activeId.value ? findLeaf(activeId.value) : null
-  const activeTeam = active ? teamById(active.team) : null
-  if (active && !activeTeam) {
-    add('Team', 'New team with the active pane', () => newTeam([active.id]))
-    for (const t of teams.value) {
-      add('Team', `Add the active pane to ${t.name}`, () => joinTeam(active.id, t.id))
-    }
-  }
-  add('Team', 'New team…', () => startTeamPick(null), { hint: 'Choose which agents are in it' })
-  if (activeTeam)
-    add('Team', `Remove the active pane from ${activeTeam.name}`, () => leaveTeam(active.id))
-  for (const t of teams.value) {
-    const n = teamMembers(t.id).length
-    add('Team', `Gather ${t.name}`, () => gatherTeam(t.id), {
-      hint: `Bring its ${n} ${n === 1 ? 'pane' : 'panes'} here, side by side`
+  if (currentWs.value) {
+    const wsId = currentWs.value.id
+    add('Workspace', 'Message every agent in this workspace', () => startWsMessage(wsId), {
+      hint: 'One message, sent to each agent (never to plain shells)'
     })
-    add('Team', `Message ${t.name}`, () => startTeamMessage(t.id), {
-      hint: 'One message to every agent of the team'
+    add('Workspace', 'Project notes', () => shareProjectNotes(wsId), {
+      hint: 'A shared notes file for the agents of this workspace'
     })
-    add('Team', `Brief ${t.name}`, () => briefTeam(t.id), {
-      hint: 'Shared notes file + tell each agent its teammates'
-    })
-    add('Team', `Rename ${t.name}`, () => startTeamRename(t.id))
-    add('Team', `Disband ${t.name}`, () => disbandTeam(t.id), { hint: 'Panes stay where they are' })
   }
 
   for (const t of THEMES) {
@@ -1866,12 +1838,24 @@ const workspaceItems = computed(() =>
     let busy = false
     let needsYou = false
     const agentIds = []
+    const members = []
     forEachLeaf(w.tree, (leaf) => {
       paneCount++
       if (leaf.kind === 'agent') {
         if (leaf.agentId) agentIds.push(leaf.agentId)
         if (agentStatus[leaf.id] === 'busy') busy = true
-        if (attention[leaf.id]) needsYou = true
+        if (attention[leaf.id] || approvals[leaf.id]) needsYou = true
+        members.push({
+          id: leaf.id,
+          num: leaf.num || 0,
+          title: leaf.title || 'Agent',
+          agentId: leaf.agentId || null,
+          accent: leaf.accent || null,
+          state: paneState(leaf),
+          reset: limits[leaf.id] ? limits[leaf.id].reset : '',
+          held: !!pendingMessages[leaf.id],
+          active: w.id === currentWsId.value && leaf.id === w.activeId
+        })
       }
     })
     return {
@@ -1879,6 +1863,7 @@ const workspaceItems = computed(() =>
       name: w.name,
       paneCount,
       agents: agentIds,
+      members,
       busy,
       needsYou,
       folder: w.cwd ? folderName(w.cwd) : '',
@@ -1887,163 +1872,41 @@ const workspaceItems = computed(() =>
   })
 )
 
-// --- Teams: agents that work together -------------------------------------------
-// A team is a name and a colour; each member pane keeps the team id (leaf.team),
-// so it survives moves between workspaces and is saved with the layout.
-// (TEAM_COLORS and the teams ref are declared above provide('panelCtx').)
-
-function isTeam(t) {
-  return (
-    t &&
-    typeof t.id === 'string' &&
-    typeof t.name === 'string' &&
-    typeof t.color === 'string' &&
-    /^#[0-9a-f]{6}$/i.test(t.color)
-  )
-}
-
-function teamById(id) {
-  return (id && teams.value.find((t) => t.id === id)) || null
-}
-
-function teamMembers(teamId) {
+// "Needs you": everything an agent is waiting on you for, across workspaces:
+// approval prompts first, then finished work, then usage limits.
+const inboxItems = computed(() => {
   const out = []
-  forEachWsLeaf((l) => {
-    if (l.team === teamId) out.push(l)
-  })
-  return out
-}
-
-// Teams nobody belongs to any more (their panes were closed) go away.
-function pruneTeams() {
-  const used = new Set()
-  forEachWsLeaf((l) => l.team && used.add(l.team))
-  teams.value = teams.value.filter((t) => used.has(t.id))
-}
-
-function newTeam(leafIds) {
-  const names = new Set(teams.value.map((t) => t.name))
-  let n = 1
-  while (names.has(`Team ${n}`)) n++
-  const colors = new Set(teams.value.map((t) => t.color))
-  const color = TEAM_COLORS.find((c) => !colors.has(c)) || TEAM_COLORS[n % TEAM_COLORS.length]
-  const team = { id: newId('team'), name: `Team ${n}`, color }
-  teams.value.push(team)
-  for (const id of leafIds) {
-    const leaf = findLeaf(id)
-    if (leaf) leaf.team = team.id
-  }
-  return team
-}
-
-function joinTeam(leafId, teamId) {
-  const leaf = findLeaf(leafId)
-  if (!leaf || !teamById(teamId)) return
-  const old = leaf.team
-  leaf.team = teamId
-  if (old && old !== teamId) pruneTeams()
-}
-
-function leaveTeam(leafId) {
-  const leaf = findLeaf(leafId)
-  if (!leaf || !leaf.team) return
-  leaf.team = null
-  pruneTeams()
-}
-
-function renameTeam(teamId, name) {
-  const team = teamById(teamId)
-  const clean = String(name || '')
-    .trim()
-    .slice(0, 40)
-  if (team && clean) team.name = clean
-}
-
-// Open the sidebar and put a team's name into edit mode.
-function startTeamRename(teamId) {
-  if (sidebarCollapsed.value) toggleSidebar()
-  nextTick(() => sidebarEl.value && sidebarEl.value.startTeamRename(teamId))
-}
-
-// "Dissocier": the team goes away, its panes stay where they are.
-function disbandTeam(teamId) {
-  const team = teamById(teamId)
-  if (!team) return
-  for (const leaf of teamMembers(teamId)) leaf.team = null
-  teams.value = teams.value.filter((t) => t.id !== teamId)
-  showToast(`${team.name} disbanded. Its panes stay where they are.`, { timeout: 3000 })
-}
-
-// "Réunir": bring the members into one workspace, next to each other. That is
-// the current workspace when a member is in it, else the first member's. No
-// workspace is created.
-function gatherTeam(teamId) {
-  const team = teamById(teamId)
-  const members = teamMembers(teamId)
-  if (!team || !members.length) return
-  const here = currentWs.value
-  const target =
-    here && members.some((l) => wsOfLeaf(l.id) === here) ? here : wsOfLeaf(members[0].id)
-  if (!target) return
-  const away = members.filter((l) => wsOfLeaf(l.id) !== target)
-  for (const leaf of away) {
-    const from = wsOfLeaf(leaf.id)
-    const rest = removeLeaf(from.tree, leaf.id)
-    from.tree = rest
-    if (from.activeId === leaf.id) from.activeId = rest ? firstLeafId(rest) : null
-    if (!rest) dropEmptiedWorkspace(from)
-    // Split next to the last member already here.
-    let anchor = null
-    forEachLeaf(target.tree, (l) => {
-      if (l.team === teamId) anchor = l.id
-    })
-    const pair = (orig) =>
-      reactive({
-        type: 'split',
-        id: newId('split'),
-        dir: 'row',
-        sizes: [50, 50],
-        children: [orig, leaf]
-      })
-    target.tree = !target.tree
-      ? leaf
-      : anchor
-        ? replaceNode(target.tree, anchor, pair)
-        : pair(target.tree)
-  }
-  selectWorkspace(target.id)
-  target.activeId = members[0].id
-  refitSoon()
-  if (!away.length)
-    showToast(`${team.name} is already together in ${target.name}.`, { timeout: 2500 })
-}
-
-// A workspace that a gather left without panes goes away, unless tasks still
-// belong to it: then it gets a fresh shell, like any emptied workspace.
-function dropEmptiedWorkspace(ws) {
-  if (boardTasks.some((t) => t.wsId === ws.id)) {
-    createLeaf(selectedShell.value, null, ws.cwd).then((leaf) => {
-      if (leaf && !ws.tree) {
-        ws.tree = leaf
-        ws.activeId = leaf.id
+  const many = workspaces.value.length > 1
+  for (const ws of workspaces.value) {
+    forEachLeaf(ws.tree, (leaf) => {
+      if (leaf.kind !== 'agent') return
+      const where = many ? ` · ${ws.name}` : ''
+      const base = {
+        paneId: leaf.id,
+        title: leaf.title || 'Agent',
+        agentId: leaf.agentId,
+        accent: leaf.accent
+      }
+      if (approvals[leaf.id]) {
+        out.push({ ...base, kind: 'approval', rank: 0, text: `Asks for your approval${where}` })
+      } else if (attention[leaf.id]) {
+        out.push({ ...base, kind: 'done', rank: 1, text: `Finished, waiting for you${where}` })
+      } else if (limits[leaf.id]) {
+        const r = limits[leaf.id].reset
+        const when = r ? (/^in /.test(r) ? ` · resets ${r}` : ` · resets at ${r}`) : ''
+        out.push({ ...base, kind: 'limited', rank: 2, text: `Usage limit${when}${where}` })
       }
     })
-    return
   }
-  const idx = workspaces.value.indexOf(ws)
-  if (idx >= 0) workspaces.value.splice(idx, 1)
-}
+  return out.sort((a, b) => a.rank - b.rank)
+})
 
-// --- Team messages ------------------------------------------------------------
-// What agent CLIs show while they wait for the user to approve something
-// (Codex, Claude Code, Gemini). Typing into such a prompt could answer it, so
-// a message waits until the prompt is gone.
-const APPROVAL_PROMPT =
-  /Would you like to (run|make|apply)|Press enter to confirm|Do you want to (proceed|make|create|allow|run)|Allow execution|Apply this change|\(y\/n\)|\[y\/N\]/i
-
+// --- Messages to agents ------------------------------------------------------------
+// An agent showing an approval prompt: typing into it could answer it, so a
+// message waits until the prompt is gone.
 function awaitingApproval(leafId) {
   const pane = getPane(leafId)
-  return !!(pane && pane.screenText && APPROVAL_PROMPT.test(pane.screenText(20)))
+  return !!(pane && pane.screenText && detectApproval(pane.screenText(20)))
 }
 
 // Messages waiting for an agent to be free: leafId -> [text].
@@ -2083,37 +1946,36 @@ function flushPending() {
   pendingTimer = waiting ? setTimeout(flushPending, 2000) : null
 }
 
-function teamAgents(teamId) {
-  return teamMembers(teamId).filter((l) => l.kind === 'agent')
+// The agents (not plain shells) of a workspace.
+function wsAgents(wsId) {
+  const ws = workspaces.value.find((w) => w.id === wsId)
+  const out = []
+  if (ws) forEachLeaf(ws.tree, (l) => l.kind === 'agent' && out.push(l))
+  return out
 }
 
-function teamRoster(teamId, exceptId) {
-  return teamAgents(teamId)
-    .filter((l) => l.id !== exceptId)
-    .map((l) => `#${l.num || '?'} ${l.title}${l.agentId ? ` (${l.agentId})` : ''}`)
-    .join(', ')
+function agentLabel(l) {
+  return `#${l.num || '?'} ${l.title}${l.agentId ? ` (${l.agentId})` : ''}`
 }
 
-// Send one message to every agent of a team (never to plain shells, which
-// would run it as a command).
-function messageTeam(teamId, text) {
-  const team = teamById(teamId)
+// Send one message to every agent of a workspace (never to plain shells,
+// which would run it as a command).
+function messageWorkspace(wsId, text) {
+  const ws = workspaces.value.find((w) => w.id === wsId)
   const body = String(text || '').trim()
-  if (!team || !body) return
-  const agents = teamAgents(teamId)
+  if (!ws || !body) return
+  const agents = wsAgents(wsId)
   if (!agents.length) {
-    showToast(`${team.name} has no agent to message.`, { kind: 'error' })
+    showToast(`${ws.name} has no agent to message.`, { kind: 'error' })
     return
   }
   // Agents out of usage would not act on it: skip them and say so.
   const limited = agents.filter((l) => limits[l.id])
   const reached = agents.filter((l) => !limits[l.id])
-  for (const leaf of reached) deliverToAgent(leaf.id, `[Message to team ${team.name}] ${body}`)
+  for (const leaf of reached) deliverToAgent(leaf.id, body)
   const held = reached.filter((l) => pendingMessages[l.id])
   const names = (list) => list.map((l) => l.title).join(', ')
-  const parts = [
-    `Sent to ${reached.length - held.length} of ${agents.length} agents of ${team.name}.`
-  ]
+  const parts = [`Sent to ${reached.length - held.length} of ${agents.length} agents.`]
   if (held.length) {
     parts.push(
       `${names(held)} ${held.length === 1 ? 'is' : 'are'} waiting for your approval and will get it right after.`
@@ -2140,11 +2002,10 @@ function limitWhen(leafId) {
 // An agent just stopped because it hit its usage limit.
 function notifyAgentLimit(node, hit) {
   const ws = wsOfLeaf(node.id)
-  const team = teamById(node.team)
   const when = limitWhen(node.id) || (hit && hit.reset ? ` (resets ${hit.reset})` : '')
-  const others = team ? teamAgents(team.id).filter((l) => l.id !== node.id && !limits[l.id]) : []
+  const others = ws ? wsAgents(ws.id).filter((l) => l.id !== node.id && !limits[l.id]) : []
   const handOver = others.length
-    ? ` ${others.map((l) => l.title).join(', ')} in ${team.name} can take over.`
+    ? ` ${others.map((l) => l.title).join(', ')} can take over.`
     : ''
   const text = `${node.title} hit its usage limit${when}.${handOver}`
   if (document.hasFocus()) {
@@ -2172,19 +2033,19 @@ function slugify(name) {
     .slice(0, 40)
 }
 
-function teamNotesTemplate(team) {
+function projectNotesTemplate(ws) {
   const today = new Date().toISOString().slice(0, 10)
-  const members = teamMembers(team.id)
-    .map((l) => `- #${l.num || '?'} ${l.title}${l.agentId ? ` (${l.agentId})` : ''}`)
+  const members = wsAgents(ws.id)
+    .map((l) => `- ${agentLabel(l)}`)
     .join('\n')
-  return `# Team ${team.name}
+  return `# Project notes: ${ws.name}
 
-Shared notes of the agents in this team (made by Tessel). Every agent reads
-this file before working and writes here what it does.
+Shared notes of the agents working in this project (made by Tessel). Every
+agent reads this file before working and writes here what it does.
 
-## Members
+## Agents
 
-${members}
+${members || '- (none yet)'}
 
 ## Who does what
 
@@ -2200,59 +2061,54 @@ ${members}
 
 ## Journal
 
-- ${today} Tessel: team created.
+- ${today} Tessel: notes created.
 `
 }
 
-// Create the team's shared notes file (once) and tell each agent who its
-// teammates are and where the file is.
-async function briefTeam(teamId) {
-  const team = teamById(teamId)
-  if (!team) return
-  const agents = teamAgents(teamId)
+// Create the workspace's shared notes file (once) and tell each agent who the
+// others are and where the file is.
+async function shareProjectNotes(wsId) {
+  const ws = workspaces.value.find((w) => w.id === wsId)
+  if (!ws) return
+  const agents = wsAgents(wsId)
   if (!agents.length) {
-    showToast(`Add an agent to ${team.name} first.`, { kind: 'error' })
+    showToast(`Open an agent in ${ws.name} first.`, { kind: 'error' })
     return
   }
-  const ws = wsOfLeaf(agents[0].id)
-  const dir = (ws && ws.cwd) || agents[0].startDir
+  const dir = ws.cwd || agents[0].startDir
   if (!dir) {
-    showToast(`Set a project folder for "${ws ? ws.name : 'this workspace'}" first.`, {
-      kind: 'error'
-    })
+    showToast(`Set a project folder for "${ws.name}" first.`, { kind: 'error' })
     return
   }
-  if (!window.shellApi.teamNotes) {
-    showToast('Restart Tessel to enable team notes.', { kind: 'error' })
+  if (!window.shellApi.projectNotes) {
+    showToast('Restart Tessel to enable project notes.', { kind: 'error' })
     return
   }
-  const res = await window.shellApi.teamNotes({
-    dir,
-    slug: slugify(team.name) || team.id,
-    content: teamNotesTemplate(team)
-  })
+  const res = await window.shellApi.projectNotes({ dir, content: projectNotesTemplate(ws) })
   if (!res || !res.ok) {
-    showToast(`Could not create the team notes: ${(res && res.error) || 'unknown error'}`, {
+    showToast(`Could not create the project notes: ${(res && res.error) || 'unknown error'}`, {
       kind: 'error'
     })
     return
   }
   for (const leaf of agents) {
     if (limits[leaf.id]) continue // out of usage: it would not act on it
-    const mates = teamRoster(teamId, leaf.id)
+    const others = agents
+      .filter((l) => l.id !== leaf.id)
+      .map(agentLabel)
+      .join(', ')
     deliverToAgent(
       leaf.id,
-      `[Tessel] You are in team "${team.name}"` +
-        (mates ? ` with ${mates}.` : ' (no other agent yet).') +
+      `[Tessel] Other agents in this project: ${others || 'none yet'}.` +
         ` Shared notes: ${res.path} . Read that file now, agree there on who does what, ` +
         'and add a dated line to its Journal section for each notable change. ' +
         'Before editing a file another agent may be editing, check the notes. Do not commit that file.'
     )
   }
   const limited = agents.filter((l) => limits[l.id])
-  const briefed = agents.length - limited.length
+  const told = agents.length - limited.length
   showToast(
-    `Briefed ${briefed} ${briefed === 1 ? 'agent' : 'agents'}. Notes: ${res.path}` +
+    `${res.created ? 'Created' : 'Shared'} the project notes with ${told} ${told === 1 ? 'agent' : 'agents'}. ${res.path}` +
       (limited.length
         ? ` Skipped ${limited.map((l) => `${l.title}${limitWhen(l.id)}`).join(', ')}: usage limit reached.`
         : ''),
@@ -2260,100 +2116,22 @@ async function briefTeam(teamId) {
   )
 }
 
-// Open the sidebar's message box under a team.
-function startTeamMessage(teamId) {
+// Open the sidebar's message box under a workspace.
+function startWsMessage(wsId) {
   if (sidebarCollapsed.value) toggleSidebar()
-  nextTick(() => sidebarEl.value && sidebarEl.value.startTeamMessage(teamId))
+  nextTick(() => sidebarEl.value && sidebarEl.value.startMessage(wsId))
 }
 
-// A pane's agent state for the sidebar:
-// 'limited' (usage limit reached) | 'working' | 'waiting' | 'ready'.
+// A pane's agent state for the sidebar: 'approval' (asks you to approve
+// something) | 'limited' (usage limit reached) | 'working' | 'waiting' (done,
+// waiting for you) | 'ready'.
 function paneState(leaf) {
   if (leaf.kind !== 'agent') return 'ready'
+  if (approvals[leaf.id]) return 'approval'
   if (limits[leaf.id]) return 'limited'
   if (attention[leaf.id]) return 'waiting'
   return agentStatus[leaf.id] === 'busy' ? 'working' : 'ready'
 }
-
-// Agents in no team yet, for the sidebar's team picker: the current
-// workspace's first, then the others with the workspace they are in.
-const teamCandidates = computed(() => {
-  const out = []
-  const ordered = [
-    ...workspaces.value.filter((w) => w.id === currentWsId.value),
-    ...workspaces.value.filter((w) => w.id !== currentWsId.value)
-  ]
-  for (const ws of ordered) {
-    forEachLeaf(ws.tree, (l) => {
-      if (l.kind !== 'agent' || l.team) return
-      out.push({
-        id: l.id,
-        num: l.num || 0,
-        title: l.title || 'Agent',
-        agentId: l.agentId || null,
-        accent: l.accent || null,
-        where: ws.name,
-        here: ws.id === currentWsId.value
-      })
-    })
-  }
-  return out
-})
-
-// Open the sidebar's agent picker, for a new team (null) or to add to one.
-function startTeamPick(teamId) {
-  if (sidebarCollapsed.value) toggleSidebar()
-  nextTick(() => sidebarEl.value && sidebarEl.value.startPick(teamId))
-}
-
-function createTeamWith(ids) {
-  if (ids && ids.length) newTeam(ids)
-}
-
-function addToTeam(teamId, ids) {
-  for (const id of ids || []) joinTeam(id, teamId)
-}
-
-// Every team with its members and where they are, for the sidebar.
-// The workspace a team belongs to in the sidebar: where most of its agents
-// are (ties go to the first member's). null when none is open.
-function teamHome(members) {
-  const counts = new Map()
-  for (const leaf of members) {
-    const ws = wsOfLeaf(leaf.id)
-    if (ws) counts.set(ws.id, (counts.get(ws.id) || 0) + 1)
-  }
-  let best = null
-  for (const [id, n] of counts) if (!best || n > counts.get(best)) best = id
-  return best
-}
-
-const teamItems = computed(() =>
-  teams.value.map((t) => ({
-    id: t.id,
-    name: t.name,
-    color: t.color,
-    wsId: teamHome(teamMembers(t.id)),
-    members: teamMembers(t.id).map((leaf) => {
-      const ws = wsOfLeaf(leaf.id)
-      return {
-        id: leaf.id,
-        num: leaf.num || 0,
-        title: leaf.title || leaf.shellName || 'Terminal',
-        kind: leaf.kind || 'shell',
-        agentId: leaf.agentId || null,
-        shellId: leaf.shellId || null,
-        accent: leaf.accent || null,
-        where: ws ? ws.name : '',
-        wsId: ws ? ws.id : null,
-        here: !!ws && ws.id === currentWsId.value,
-        state: paneState(leaf),
-        reset: limits[leaf.id] ? limits[leaf.id].reset : '',
-        held: !!pendingMessages[leaf.id]
-      }
-    })
-  }))
-)
 
 // Panes of the current workspace with their agent state, for the sidebar's
 // session list. Only the Warp theme shows it.
@@ -2370,7 +2148,6 @@ const sessionItems = computed(() => {
       agentId: leaf.agentId || null,
       shellId: leaf.shellId || null,
       accent: leaf.accent || null,
-      team: teamById(leaf.team),
       state,
       reset: limits[leaf.id] ? limits[leaf.id].reset : '',
       active: leaf.id === activeId.value
@@ -2530,7 +2307,6 @@ async function restoreOrSeedLayout() {
       saved.settings || (Number.isFinite(saved.fontSize) ? { fontSize: saved.fontSize } : null)
     )
     if (['right', 'down', 'workspace'].includes(saved.placement)) placement.value = saved.placement
-    if (Array.isArray(saved.teams)) teams.value = saved.teams.filter(isTeam)
     // v2 stores a list of workspaces; v1 stored a single tree.
     const snaps = !settings.restoreWorkspaces
       ? []
@@ -2594,7 +2370,6 @@ onMounted(async () => {
   )
 
   // Persist on any structural / size / title / broadcast change (debounced).
-  pruneTeams()
   persistReady = true
   watch(
     [
@@ -2605,8 +2380,7 @@ onMounted(async () => {
       sidebarCollapsed,
       sidebarWidth,
       settings,
-      placement,
-      teams
+      placement
     ],
     scheduleSave,
     {
@@ -2972,17 +2746,10 @@ onBeforeUnmount(() => {
         :current-id="currentWsId"
         :collapsed="sidebarCollapsed"
         :width="sidebarWidth"
-        :sessions="sessionItems"
-        :teams="teamItems"
-        :candidates="teamCandidates"
+        :inbox="inboxItems"
         @focus-pane="focusPane"
-        @create-team="createTeamWith"
-        @add-to-team="addToTeam"
-        @rename-team="renameTeam"
-        @gather-team="gatherTeam"
-        @disband-team="disbandTeam"
-        @brief-team="briefTeam"
-        @message-team="messageTeam"
+        @message-ws="messageWorkspace"
+        @notes-ws="shareProjectNotes"
         @select="selectWorkspace"
         @create="createWorkspace"
         @rename="renameWorkspace"

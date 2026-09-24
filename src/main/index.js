@@ -426,29 +426,24 @@ ipcMain.handle('dialog:pickFolder', async (_evt, opts = {}) => {
   return res.canceled || !res.filePaths.length ? null : res.filePaths[0]
 })
 
-// Shared notes of an agent team: <project>\.tessel\teams\<slug>.md. Created
-// once from the renderer's template; an existing file (agents write in it) is
-// never overwritten. Resolves to { ok, path, created } or { ok: false, error }.
-ipcMain.handle('team:ensureNotes', (_evt, opts = {}) => {
+// Shared notes of the agents of a project: <project>/.tessel/notes.md.
+// Created once from the renderer's template; an existing file (agents write
+// in it) is never overwritten. Resolves to { ok, path, created } or
+// { ok: false, error }.
+ipcMain.handle('notes:ensure', (_evt, opts = {}) => {
   try {
     const dir = String(opts.dir || '')
-    const slug = String(opts.slug || '')
-      .toLowerCase()
-      .replace(/[^a-z0-9-]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 40)
     if (!isAbsolute(dir) || !fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
       return { ok: false, error: 'The project folder does not exist.' }
     }
-    if (!slug) return { ok: false, error: 'The team needs a name.' }
-    const folder = join(dir, '.tessel', 'teams')
-    const file = join(folder, `${slug}.md`)
+    const folder = join(dir, '.tessel')
+    const file = join(folder, 'notes.md')
     if (fs.existsSync(file)) return { ok: true, path: file, created: false }
     fs.mkdirSync(folder, { recursive: true })
     fs.writeFileSync(file, String(opts.content || ''), { flag: 'wx' })
     return { ok: true, path: file, created: true }
   } catch (err) {
-    log.warn('team', `notes file: ${err.message}`)
+    log.warn('notes', `notes file: ${err.message}`)
     return { ok: false, error: err.message }
   }
 })

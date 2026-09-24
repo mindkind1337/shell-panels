@@ -5,15 +5,25 @@
 //                       were looking elsewhere, i.e. it is waiting on you.
 //   limits[id]       -> { reset } when the agent has hit its usage limit
 //                       (see agentLimit.js); reset is its reset time or ''.
+//   approvals[id]    -> true while the agent shows an approval prompt
+//                       ("Would you like to run...", see agentLimit.js).
 // The workspace sidebar reads both to badge workspaces.
 import { reactive } from 'vue'
 
 export const agentStatus = reactive({})
 export const attention = reactive({})
 export const limits = reactive({})
+export const approvals = reactive({})
+
+export function setApproval(id, on) {
+  if (on) approvals[id] = true
+  else if (approvals[id]) delete approvals[id]
+}
 
 export function setLimit(id, info) {
-  limits[id] = { reset: (info && info.reset) || '' }
+  // Keep a reset time already known when this read of the screen shows none.
+  const reset = (info && info.reset) || (limits[id] && limits[id].reset) || ''
+  limits[id] = { reset }
 }
 
 export function clearLimit(id) {
@@ -36,4 +46,5 @@ export function clearAgentStatus(id) {
   delete agentStatus[id]
   delete attention[id]
   delete limits[id]
+  delete approvals[id]
 }
