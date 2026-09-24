@@ -938,7 +938,8 @@ function buildCommands() {
     }
   }
   add('Team', 'New team…', () => startTeamPick(null), { hint: 'Choose which agents are in it' })
-  if (activeTeam) add('Team', `Remove the active pane from ${activeTeam.name}`, () => leaveTeam(active.id))
+  if (activeTeam)
+    add('Team', `Remove the active pane from ${activeTeam.name}`, () => leaveTeam(active.id))
   for (const t of teams.value) {
     const n = teamMembers(t.id).length
     add('Team', `Gather ${t.name}`, () => gatherTeam(t.id), {
@@ -1997,7 +1998,13 @@ function gatherTeam(teamId) {
       if (l.team === teamId) anchor = l.id
     })
     const pair = (orig) =>
-      reactive({ type: 'split', id: newId('split'), dir: 'row', sizes: [50, 50], children: [orig, leaf] })
+      reactive({
+        type: 'split',
+        id: newId('split'),
+        dir: 'row',
+        sizes: [50, 50],
+        children: [orig, leaf]
+      })
     target.tree = !target.tree
       ? leaf
       : anchor
@@ -2007,7 +2014,8 @@ function gatherTeam(teamId) {
   selectWorkspace(target.id)
   target.activeId = members[0].id
   refitSoon()
-  if (!away.length) showToast(`${team.name} is already together in ${target.name}.`, { timeout: 2500 })
+  if (!away.length)
+    showToast(`${team.name} is already together in ${target.name}.`, { timeout: 2500 })
 }
 
 // A workspace that a gather left without panes goes away, unless tasks still
@@ -2103,7 +2111,9 @@ function messageTeam(teamId, text) {
   for (const leaf of reached) deliverToAgent(leaf.id, `[Message to team ${team.name}] ${body}`)
   const held = reached.filter((l) => pendingMessages[l.id])
   const names = (list) => list.map((l) => l.title).join(', ')
-  const parts = [`Sent to ${reached.length - held.length} of ${agents.length} agents of ${team.name}.`]
+  const parts = [
+    `Sent to ${reached.length - held.length} of ${agents.length} agents of ${team.name}.`
+  ]
   if (held.length) {
     parts.push(
       `${names(held)} ${held.length === 1 ? 'is' : 'are'} waiting for your approval and will get it right after.`
@@ -2133,7 +2143,9 @@ function notifyAgentLimit(node, hit) {
   const team = teamById(node.team)
   const when = limitWhen(node.id) || (hit && hit.reset ? ` (resets ${hit.reset})` : '')
   const others = team ? teamAgents(team.id).filter((l) => l.id !== node.id && !limits[l.id]) : []
-  const handOver = others.length ? ` ${others.map((l) => l.title).join(', ')} in ${team.name} can take over.` : ''
+  const handOver = others.length
+    ? ` ${others.map((l) => l.title).join(', ')} in ${team.name} can take over.`
+    : ''
   const text = `${node.title} hit its usage limit${when}.${handOver}`
   if (document.hasFocus()) {
     showToast(text, {
@@ -2303,11 +2315,25 @@ function addToTeam(teamId, ids) {
 }
 
 // Every team with its members and where they are, for the sidebar.
+// The workspace a team belongs to in the sidebar: where most of its agents
+// are (ties go to the first member's). null when none is open.
+function teamHome(members) {
+  const counts = new Map()
+  for (const leaf of members) {
+    const ws = wsOfLeaf(leaf.id)
+    if (ws) counts.set(ws.id, (counts.get(ws.id) || 0) + 1)
+  }
+  let best = null
+  for (const [id, n] of counts) if (!best || n > counts.get(best)) best = id
+  return best
+}
+
 const teamItems = computed(() =>
   teams.value.map((t) => ({
     id: t.id,
     name: t.name,
     color: t.color,
+    wsId: teamHome(teamMembers(t.id)),
     members: teamMembers(t.id).map((leaf) => {
       const ws = wsOfLeaf(leaf.id)
       return {
@@ -2319,6 +2345,7 @@ const teamItems = computed(() =>
         shellId: leaf.shellId || null,
         accent: leaf.accent || null,
         where: ws ? ws.name : '',
+        wsId: ws ? ws.id : null,
         here: !!ws && ws.id === currentWsId.value,
         state: paneState(leaf),
         reset: limits[leaf.id] ? limits[leaf.id].reset : '',

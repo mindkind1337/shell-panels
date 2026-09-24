@@ -152,6 +152,13 @@ function stateText(item) {
   return SESSION_STATE[item.state]
 }
 
+// --- Teams: each one is listed under its workspace ----------------------------
+// A team's workspace (`wsId`) is where most of its agents are. A team with no
+// agent open goes under the current workspace.
+function teamsIn(wsId) {
+  return props.teams.filter((t) => (t.wsId || props.currentId) === wsId)
+}
+
 // --- Teams: rename in place ---------------------------------------------------
 const editingTeamId = ref(null)
 const teamDraft = ref('')
@@ -289,106 +296,276 @@ defineExpose({
     </div>
 
     <div class="ws-list">
-      <div
-        v-for="item in items"
-        :key="item.id"
-        class="ws-item"
-        :class="{ current: item.id === currentId }"
-        :data-ws-id="item.id"
-        :title="collapsed ? item.name : 'Double-click to rename'"
-        role="button"
-        tabindex="0"
-        @click="emit('select', item.id)"
-        @keydown.enter="emit('select', item.id)"
-        @dblclick="!collapsed && startRename(item)"
-      >
-        <span class="ws-badge">
-          {{ initials(item.name) }}
-          <span
-            v-if="item.needsYou"
-            class="ws-busy attention"
-            title="An agent is waiting for you"
-          ></span>
-          <span v-else-if="item.busy" class="ws-busy" title="An agent is working"></span>
-        </span>
+      <template v-for="item in items" :key="item.id">
+        <div
+          class="ws-item"
+          :class="{ current: item.id === currentId }"
+          :data-ws-id="item.id"
+          :title="collapsed ? item.name : 'Double-click to rename'"
+          role="button"
+          tabindex="0"
+          @click="emit('select', item.id)"
+          @keydown.enter="emit('select', item.id)"
+          @dblclick="!collapsed && startRename(item)"
+        >
+          <span class="ws-badge">
+            {{ initials(item.name) }}
+            <span
+              v-if="item.needsYou"
+              class="ws-busy attention"
+              title="An agent is waiting for you"
+            ></span>
+            <span v-else-if="item.busy" class="ws-busy" title="An agent is working"></span>
+          </span>
 
+          <template v-if="!collapsed">
+            <div class="ws-body">
+              <input
+                v-if="editingId === item.id"
+                :ref="(el) => (inputEls[item.id] = el)"
+                v-model="draft"
+                class="ws-input"
+                @click.stop
+                @dblclick.stop
+                @blur="commitRename"
+                @keydown.enter.prevent.stop="commitRename"
+                @keydown.escape.prevent.stop="cancelRename"
+              />
+              <span v-else class="ws-name">{{ item.name }}</span>
+              <span class="ws-meta">
+                <BrandIcon v-for="a in uniqueAgents(item.agents)" :key="a" :kind="a" :size="11" />
+                <span>{{ item.paneCount }} {{ item.paneCount === 1 ? 'pane' : 'panes' }}</span>
+              </span>
+              <span v-if="item.folder" class="ws-folder" :title="item.cwd">
+                <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path
+                    d="M1.8 4.2c0-.7.5-1.2 1.2-1.2h3l1.5 1.6H13c.7 0 1.2.5 1.2 1.2v6.3c0 .7-.5 1.2-1.2 1.2H3c-.7 0-1.2-.5-1.2-1.2V4.2z"
+                    stroke="currentColor"
+                    stroke-width="1.3"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+                {{ item.folder }}
+              </span>
+            </div>
+
+            <div class="ws-actions">
+              <button class="ws-icon-btn small" title="Rename" @click.stop="startRename(item)">
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path
+                    d="M10.5 2.5l3 3L6 13H3v-3l7.5-7.5z"
+                    stroke="currentColor"
+                    stroke-width="1.4"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </button>
+              <button
+                class="ws-icon-btn small"
+                :title="
+                  item.cwd
+                    ? `Project folder: ${item.cwd} (click to change)`
+                    : 'Set a project folder: new panes start there'
+                "
+                @click.stop="emit('folder', item.id)"
+              >
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path
+                    d="M1.8 4.2c0-.7.5-1.2 1.2-1.2h3l1.5 1.6H13c.7 0 1.2.5 1.2 1.2v6.3c0 .7-.5 1.2-1.2 1.2H3c-.7 0-1.2-.5-1.2-1.2V4.2z"
+                    stroke="currentColor"
+                    stroke-width="1.4"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </button>
+              <button
+                class="ws-icon-btn small danger"
+                title="Delete workspace"
+                @click.stop="emit('remove', item.id)"
+              >
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path
+                    d="M4 4l8 8M12 4l-8 8"
+                    stroke="currentColor"
+                    stroke-width="1.5"
+                    stroke-linecap="round"
+                  />
+                </svg>
+              </button>
+            </div>
+          </template>
+        </div>
+        <!-- Teams show under the workspace their agents work in. -->
         <template v-if="!collapsed">
-          <div class="ws-body">
-            <input
-              v-if="editingId === item.id"
-              :ref="(el) => (inputEls[item.id] = el)"
-              v-model="draft"
-              class="ws-input"
-              @click.stop
-              @dblclick.stop
-              @blur="commitRename"
-              @keydown.enter.prevent.stop="commitRename"
-              @keydown.escape.prevent.stop="cancelRename"
-            />
-            <span v-else class="ws-name">{{ item.name }}</span>
-            <span class="ws-meta">
-              <BrandIcon v-for="a in uniqueAgents(item.agents)" :key="a" :kind="a" :size="11" />
-              <span>{{ item.paneCount }} {{ item.paneCount === 1 ? 'pane' : 'panes' }}</span>
-            </span>
-            <span v-if="item.folder" class="ws-folder" :title="item.cwd">
-              <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path
-                  d="M1.8 4.2c0-.7.5-1.2 1.2-1.2h3l1.5 1.6H13c.7 0 1.2.5 1.2 1.2v6.3c0 .7-.5 1.2-1.2 1.2H3c-.7 0-1.2-.5-1.2-1.2V4.2z"
-                  stroke="currentColor"
-                  stroke-width="1.3"
-                  stroke-linejoin="round"
-                />
-              </svg>
-              {{ item.folder }}
-            </span>
-          </div>
-
-          <div class="ws-actions">
-            <button class="ws-icon-btn small" title="Rename" @click.stop="startRename(item)">
-              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path
-                  d="M10.5 2.5l3 3L6 13H3v-3l7.5-7.5z"
-                  stroke="currentColor"
-                  stroke-width="1.4"
-                  stroke-linejoin="round"
-                />
-              </svg>
-            </button>
+          <div
+            v-for="t in teamsIn(item.id)"
+            :key="t.id"
+            class="ws-team nested"
+            :style="{ '--team': t.color }"
+          >
+            <div class="ws-team-head">
+              <span class="team-dot"></span>
+              <input
+                v-if="editingTeamId === t.id"
+                :ref="(el) => (teamInputEls[t.id] = el)"
+                v-model="teamDraft"
+                class="ws-input"
+                maxlength="40"
+                @blur="commitTeamRename"
+                @keydown.enter.prevent.stop="commitTeamRename"
+                @keydown.escape.prevent.stop="cancelTeamRename"
+              />
+              <span
+                v-else
+                class="ws-team-name"
+                title="Double-click to rename"
+                @dblclick="startTeamRename(t)"
+                >{{ t.name }}</span
+              >
+              <span class="ws-team-actions">
+                <button
+                  class="ws-icon-btn small"
+                  title="Add agents to this team"
+                  @click="startPick(t.id)"
+                >
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path
+                      d="M8 3v10M3 8h10"
+                      stroke="currentColor"
+                      stroke-width="1.6"
+                      stroke-linecap="round"
+                    />
+                  </svg>
+                </button>
+                <button class="ws-icon-btn small" title="Rename" @click="startTeamRename(t)">
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path
+                      d="M10.5 2.5l3 3L6 13H3v-3l7.5-7.5z"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                </button>
+                <button
+                  class="ws-icon-btn small"
+                  title="Message every agent of the team"
+                  @click="startTeamMessage(t)"
+                >
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path
+                      d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2v-7z"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                </button>
+                <button
+                  class="ws-icon-btn small"
+                  title="Brief: shared notes file, and tell each agent its teammates"
+                  @click="emit('brief-team', t.id)"
+                >
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path
+                      d="M4 2.5h6l2.5 2.5v8.5H4v-11zM6 7h4.5M6 9.5h4.5"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linejoin="round"
+                      stroke-linecap="round"
+                    />
+                  </svg>
+                </button>
+                <button
+                  class="ws-icon-btn small"
+                  title="Gather: bring the team's panes into this workspace, side by side"
+                  @click="emit('gather-team', t.id)"
+                >
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <rect
+                      x="2"
+                      y="3"
+                      width="5"
+                      height="10"
+                      rx="1.2"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                    />
+                    <rect
+                      x="9"
+                      y="3"
+                      width="5"
+                      height="10"
+                      rx="1.2"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                    />
+                  </svg>
+                </button>
+                <button
+                  class="ws-icon-btn small danger"
+                  title="Disband: the team goes away, its panes stay where they are"
+                  @click="emit('disband-team', t.id)"
+                >
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path
+                      d="M4 4l8 8M12 4l-8 8"
+                      stroke="currentColor"
+                      stroke-width="1.5"
+                      stroke-linecap="round"
+                    />
+                  </svg>
+                </button>
+              </span>
+            </div>
             <button
-              class="ws-icon-btn small"
-              :title="
-                item.cwd
-                  ? `Project folder: ${item.cwd} (click to change)`
-                  : 'Set a project folder: new panes start there'
-              "
-              @click.stop="emit('folder', item.id)"
+              v-for="m in t.members"
+              :key="m.id"
+              class="ws-team-member"
+              :class="m.state"
+              :title="`Go to pane ${m.num || ''} in ${m.where}`"
+              @click="emit('focus-pane', m.id)"
             >
-              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path
-                  d="M1.8 4.2c0-.7.5-1.2 1.2-1.2h3l1.5 1.6H13c.7 0 1.2.5 1.2 1.2v6.3c0 .7-.5 1.2-1.2 1.2H3c-.7 0-1.2-.5-1.2-1.2V4.2z"
-                  stroke="currentColor"
-                  stroke-width="1.4"
-                  stroke-linejoin="round"
-                />
-              </svg>
+              <BrandIcon
+                :kind="m.kind === 'agent' ? m.agentId : m.shellId"
+                :accent="m.kind === 'agent' ? m.accent : null"
+                :label="m.kind === 'agent' ? m.title : null"
+                :size="13"
+              />
+              <span class="ws-team-member-name">{{ m.title }}</span>
+              <span class="ws-team-member-where">{{
+                m.held
+                  ? 'Message waits for your approval'
+                  : m.state === 'limited' || m.here || m.wsId === t.wsId
+                    ? stateText(m)
+                    : m.where
+              }}</span>
             </button>
-            <button
-              class="ws-icon-btn small danger"
-              title="Delete workspace"
-              @click.stop="emit('remove', item.id)"
-            >
-              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path
-                  d="M4 4l8 8M12 4l-8 8"
-                  stroke="currentColor"
-                  stroke-width="1.5"
-                  stroke-linecap="round"
-                />
-              </svg>
-            </button>
+            <div v-if="messagingTeamId === t.id" class="ws-team-message">
+              <textarea
+                :ref="(el) => (messageEls[t.id] = el)"
+                v-model="messageDraft"
+                rows="3"
+                :placeholder="`Message every agent of ${t.name}… (Enter to send, Shift+Enter for a new line)`"
+                @keydown.enter.exact.prevent="sendTeamMessage"
+                @keydown.escape.prevent.stop="messagingTeamId = null"
+              ></textarea>
+              <div class="ws-team-message-actions">
+                <button class="ws-team-message-cancel" @click="messagingTeamId = null">
+                  Cancel
+                </button>
+                <button
+                  class="ws-team-message-send"
+                  :disabled="!messageDraft.trim()"
+                  @click="sendTeamMessage"
+                >
+                  Send
+                </button>
+              </div>
+            </div>
           </div>
         </template>
-      </div>
+      </template>
     </div>
 
     <button class="ws-new" title="New workspace (Ctrl+Shift+N)" @click="emit('create')">
@@ -403,7 +580,12 @@ defineExpose({
         <span class="ws-head-title">Teams</span>
         <button class="ws-icon-btn" title="New team: choose its agents" @click="startPick(null)">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+            <path
+              d="M8 3v10M3 8h10"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+            />
           </svg>
         </button>
       </div>
@@ -423,11 +605,7 @@ defineExpose({
         <template v-for="g in candidateGroups" :key="g.where">
           <div v-if="candidateGroups.length > 1" class="ws-team-pick-where">{{ g.where }}</div>
           <label v-for="c in g.items" :key="c.id" class="ws-team-pick-item">
-            <input
-              type="checkbox"
-              :checked="picked.includes(c.id)"
-              @change="togglePicked(c.id)"
-            />
+            <input type="checkbox" :checked="picked.includes(c.id)" @change="togglePicked(c.id)" />
             <BrandIcon :kind="c.agentId" :accent="c.accent" :label="c.title" :size="13" />
             <span class="ws-team-member-name">{{ c.num ? `#${c.num} ` : '' }}{{ c.title }}</span>
           </label>
@@ -437,136 +615,6 @@ defineExpose({
           <button class="ws-team-message-send" :disabled="!picked.length" @click="finishPick">
             {{ pickTeam ? 'Add' : 'Create' }}{{ picked.length ? ` (${picked.length})` : '' }}
           </button>
-        </div>
-      </div>
-      <div v-for="t in teams" :key="t.id" class="ws-team" :style="{ '--team': t.color }">
-        <div class="ws-team-head">
-          <span class="team-dot"></span>
-          <input
-            v-if="editingTeamId === t.id"
-            :ref="(el) => (teamInputEls[t.id] = el)"
-            v-model="teamDraft"
-            class="ws-input"
-            maxlength="40"
-            @blur="commitTeamRename"
-            @keydown.enter.prevent.stop="commitTeamRename"
-            @keydown.escape.prevent.stop="cancelTeamRename"
-          />
-          <span
-            v-else
-            class="ws-team-name"
-            title="Double-click to rename"
-            @dblclick="startTeamRename(t)"
-            >{{ t.name }}</span
-          >
-          <span class="ws-team-actions">
-            <button class="ws-icon-btn small" title="Add agents to this team" @click="startPick(t.id)">
-              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-              </svg>
-            </button>
-            <button class="ws-icon-btn small" title="Rename" @click="startTeamRename(t)">
-              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path
-                  d="M10.5 2.5l3 3L6 13H3v-3l7.5-7.5z"
-                  stroke="currentColor"
-                  stroke-width="1.4"
-                  stroke-linejoin="round"
-                />
-              </svg>
-            </button>
-            <button
-              class="ws-icon-btn small"
-              title="Message every agent of the team"
-              @click="startTeamMessage(t)"
-            >
-              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path
-                  d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2v-7z"
-                  stroke="currentColor"
-                  stroke-width="1.4"
-                  stroke-linejoin="round"
-                />
-              </svg>
-            </button>
-            <button
-              class="ws-icon-btn small"
-              title="Brief: shared notes file, and tell each agent its teammates"
-              @click="emit('brief-team', t.id)"
-            >
-              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path
-                  d="M4 2.5h6l2.5 2.5v8.5H4v-11zM6 7h4.5M6 9.5h4.5"
-                  stroke="currentColor"
-                  stroke-width="1.4"
-                  stroke-linejoin="round"
-                  stroke-linecap="round"
-                />
-              </svg>
-            </button>
-            <button
-              class="ws-icon-btn small"
-              title="Gather: bring the team's panes into this workspace, side by side"
-              @click="emit('gather-team', t.id)"
-            >
-              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <rect x="2" y="3" width="5" height="10" rx="1.2" stroke="currentColor" stroke-width="1.4" />
-                <rect x="9" y="3" width="5" height="10" rx="1.2" stroke="currentColor" stroke-width="1.4" />
-              </svg>
-            </button>
-            <button
-              class="ws-icon-btn small danger"
-              title="Disband: the team goes away, its panes stay where they are"
-              @click="emit('disband-team', t.id)"
-            >
-              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
-              </svg>
-            </button>
-          </span>
-        </div>
-        <button
-          v-for="m in t.members"
-          :key="m.id"
-          class="ws-team-member"
-          :class="m.state"
-          :title="`Go to pane ${m.num || ''} in ${m.where}`"
-          @click="emit('focus-pane', m.id)"
-        >
-          <BrandIcon
-            :kind="m.kind === 'agent' ? m.agentId : m.shellId"
-            :accent="m.kind === 'agent' ? m.accent : null"
-            :label="m.kind === 'agent' ? m.title : null"
-            :size="13"
-          />
-          <span class="ws-team-member-name">{{ m.title }}</span>
-          <span class="ws-team-member-where">{{
-            m.held
-              ? 'Message waits for your approval'
-              : m.state === 'limited' || m.here
-                ? stateText(m)
-                : m.where
-          }}</span>
-        </button>
-        <div v-if="messagingTeamId === t.id" class="ws-team-message">
-          <textarea
-            :ref="(el) => (messageEls[t.id] = el)"
-            v-model="messageDraft"
-            rows="3"
-            :placeholder="`Message every agent of ${t.name}… (Enter to send, Shift+Enter for a new line)`"
-            @keydown.enter.exact.prevent="sendTeamMessage"
-            @keydown.escape.prevent.stop="messagingTeamId = null"
-          ></textarea>
-          <div class="ws-team-message-actions">
-            <button class="ws-team-message-cancel" @click="messagingTeamId = null">Cancel</button>
-            <button
-              class="ws-team-message-send"
-              :disabled="!messageDraft.trim()"
-              @click="sendTeamMessage"
-            >
-              Send
-            </button>
-          </div>
         </div>
       </div>
     </div>

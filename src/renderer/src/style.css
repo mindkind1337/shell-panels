@@ -3830,7 +3830,6 @@ body.pane-dragging * {
   cursor: pointer;
 }
 
-
 .ws-teams-start:hover {
   border-color: var(--accent);
 }
@@ -3894,4 +3893,9 @@ body.pane-dragging * {
 
 .ws-team-pick .ws-team-message-actions {
   margin-top: 6px;
+}
+
+/* A team listed under its workspace: indented below the workspace it works in. */
+.ws-team.nested {
+  margin: 2px 2px 8px 24px;
 }
