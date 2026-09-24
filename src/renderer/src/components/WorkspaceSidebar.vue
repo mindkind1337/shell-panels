@@ -2,7 +2,7 @@
 // Left sidebar: what needs you, then the workspaces, each with its agents.
 // A workspace is a project: its folder, its panes and the agents working in
 // it together. The sidebar only renders and emits intents: App owns the state.
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import BrandIcon from './BrandIcon.vue'
 
 const props = defineProps({
@@ -247,6 +247,44 @@ function onSession(x) {
   } else emit('focus-pane', x.id)
 }
 
+// --- "⋯" menus (Sessions header, team rows) -----------------------------------
+const menu = ref(null) // { kind: 'sessions' | 'team', team?, x, y }
+const menuEl = ref(null)
+
+function openMenu(e, kind, team = null) {
+  const r = e.currentTarget.getBoundingClientRect()
+  const open = menu.value && menu.value.kind === kind && menu.value.team?.id === team?.id
+  menu.value = open ? null : { kind, team, x: Math.max(8, r.right - 220), y: r.bottom + 4 }
+}
+
+function closeMenu() {
+  menu.value = null
+}
+
+// Run a menu action with the menu's team (read before the menu closes).
+function pick(fn) {
+  const team = menu.value && menu.value.team
+  closeMenu()
+  fn(team)
+}
+
+function onDocDown(e) {
+  if (menu.value && menuEl.value && !menuEl.value.contains(e.target)) closeMenu()
+}
+
+function onDocKey(e) {
+  if (e.key === 'Escape' && menu.value) closeMenu()
+}
+
+onMounted(() => {
+  window.addEventListener('pointerdown', onDocDown, true)
+  window.addEventListener('keydown', onDocKey)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('pointerdown', onDocDown, true)
+  window.removeEventListener('keydown', onDocKey)
+})
+
 // Rename a team in place.
 const editingTeam = ref(null)
 const teamDraft = ref('')
@@ -470,73 +508,20 @@ defineExpose({
       <div class="ws-head">
         <span class="ws-head-title">Sessions</span>
         <span class="ws-sessions-count">{{ sessions.length }}</span>
-        <template v-if="sessions.some((s) => s.kind === 'agent')">
-          <button
-            class="ws-icon-btn ws-head-new"
-            :class="{ on: picking === 'new' }"
-            title="New team: tick the agents that work together"
-            aria-label="New team"
-            @click="startPicking('new')"
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <circle cx="5.5" cy="5.5" r="2.2" stroke="currentColor" stroke-width="1.3" />
-              <circle cx="11" cy="6" r="1.8" stroke="currentColor" stroke-width="1.3" />
-              <path
-                d="M1.8 13c.4-2.2 1.9-3.4 3.7-3.4s3.3 1.2 3.7 3.4M9.6 9.8c.4-.2.9-.3 1.4-.3 1.6 0 2.8 1 3.1 3"
-                stroke="currentColor"
-                stroke-width="1.3"
-                stroke-linecap="round"
-              />
+        <button
+          class="ws-icon-btn ws-head-new"
+          :class="{ on: menu && menu.kind === 'sessions' }"
+          title="Teams, messages, notes and activity"
+          aria-label="Session actions"
+          aria-haspopup="menu"
+          @click="openMenu($event, 'sessions')"
+        >
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <circle cx="3.5" cy="8" r="1.3" />
+              <circle cx="8" cy="8" r="1.3" />
+              <circle cx="12.5" cy="8" r="1.3" />
             </svg>
-          </button>
-          <button
-            class="ws-icon-btn"
-            :class="{ on: messagingId === currentId }"
-            title="Message all: one message, sent to each agent of this workspace (never to plain shells)"
-            aria-label="Message all agents"
-            @click="startMessage(currentId)"
-          >
-            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path
-                d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2v-7z"
-                stroke="currentColor"
-                stroke-width="1.4"
-                stroke-linejoin="round"
-              />
-            </svg>
-          </button>
-          <button
-            class="ws-icon-btn"
-            title="Project notes: open the notes file the agents of this workspace share"
-            aria-label="Open project notes"
-            @click="emit('notes-ws', currentId)"
-          >
-            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path
-                d="M4 2.5h6l2.5 2.5v8.5H4v-11zM6 7h4.5M6 9.5h4.5"
-                stroke="currentColor"
-                stroke-width="1.4"
-                stroke-linejoin="round"
-                stroke-linecap="round"
-              />
-            </svg>
-          </button>
-          <button
-            class="ws-icon-btn"
-            title="Activity: messages, approvals, limits and working time of these agents"
-            aria-label="Activity"
-            @click="emit('activity', 'workspace')"
-          >
-            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path
-                d="M2 13.5h12M4 11V8M7 11V4.5M10 11V6.5M13 11V9"
-                stroke="currentColor"
-                stroke-width="1.5"
-                stroke-linecap="round"
-              />
-            </svg>
-          </button>
-        </template>
+        </button>
       </div>
       <div v-if="messagingId === currentId" class="ws-message">
         <textarea
@@ -580,55 +565,17 @@ defineExpose({
           >
           <span class="ws-team-count">{{ r.count }}</span>
           <button
-            class="ws-icon-btn small"
-            :class="{ on: picking === r.team.id }"
-            :title="`Add agents to ${r.team.name}`"
-            aria-label="Add agents to the team"
-            @click="startPicking(r.team.id)"
+            class="ws-icon-btn small ws-row-more"
+            :class="{ on: menu && menu.team && menu.team.id === r.team.id }"
+            :title="`${r.team.name}: message, add agents, activity, rename, ungroup`"
+            aria-label="Team actions"
+            aria-haspopup="menu"
+            @click="openMenu($event, 'team', r.team)"
           >
-            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-            </svg>
-          </button>
-          <button
-            class="ws-icon-btn small"
-            :class="{ on: messagingId === 'team:' + r.team.id }"
-            :title="`Message ${r.team.name}: one message to each of its agents`"
-            aria-label="Message the team"
-            @click="startMessage('team:' + r.team.id)"
-          >
-            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path
-                d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2v-7z"
-                stroke="currentColor"
-                stroke-width="1.4"
-                stroke-linejoin="round"
-              />
-            </svg>
-          </button>
-          <button
-            class="ws-icon-btn small"
-            :title="`Activity of ${r.team.name}`"
-            aria-label="Team activity"
-            @click="emit('activity', 'team:' + r.team.id)"
-          >
-            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path
-                d="M2 13.5h12M4 11V8M7 11V4.5M10 11V6.5M13 11V9"
-                stroke="currentColor"
-                stroke-width="1.5"
-                stroke-linecap="round"
-              />
-            </svg>
-          </button>
-          <button
-            class="ws-icon-btn small danger"
-            title="Ungroup: the team goes away, its sessions stay"
-            aria-label="Ungroup the team"
-            @click="emit('disband-team', r.team.id)"
-          >
-            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <circle cx="3.5" cy="8" r="1.3" />
+              <circle cx="8" cy="8" r="1.3" />
+              <circle cx="12.5" cy="8" r="1.3" />
             </svg>
           </button>
         </div>
@@ -706,6 +653,79 @@ defineExpose({
         </div>
       </div>
     </section>
+
+    <Teleport to="body">
+      <div
+        v-if="menu"
+        ref="menuEl"
+        class="ctx-menu ws-menu"
+        role="menu"
+        :style="{ left: menu.x + 'px', top: menu.y + 'px' }"
+        @pointerdown.stop
+      >
+        <template v-if="menu.kind === 'sessions'">
+          <button
+            class="ctx-menu-item"
+            role="menuitem"
+            :disabled="!sessions.some(canPick)"
+            @click="pick(() => startPicking('new'))"
+          >
+            New team…
+          </button>
+          <button
+            class="ctx-menu-item"
+            role="menuitem"
+            :disabled="!sessions.some((x) => x.kind === 'agent')"
+            @click="pick(() => startMessage(currentId))"
+          >
+            Message all agents…
+          </button>
+          <div class="ctx-menu-sep"></div>
+          <button class="ctx-menu-item" role="menuitem" @click="pick(() => emit('notes-ws', currentId))">
+            Project notes
+          </button>
+          <button class="ctx-menu-item" role="menuitem" @click="pick(() => emit('activity', 'workspace'))">
+            Activity
+          </button>
+        </template>
+        <template v-else-if="menu.kind === 'team'">
+          <div class="ctx-menu-label">{{ menu.team.name }}</div>
+          <button
+            class="ctx-menu-item"
+            role="menuitem"
+            @click="pick((t) => startMessage('team:' + t.id))"
+          >
+            Message the team…
+          </button>
+          <button
+            class="ctx-menu-item"
+            role="menuitem"
+            :disabled="!sessions.some(canPick)"
+            @click="pick((t) => startPicking(t.id))"
+          >
+            Add agents…
+          </button>
+          <button
+            class="ctx-menu-item"
+            role="menuitem"
+            @click="pick((t) => emit('activity', 'team:' + t.id))"
+          >
+            Activity
+          </button>
+          <div class="ctx-menu-sep"></div>
+          <button class="ctx-menu-item" role="menuitem" @click="pick((t) => startTeamRename(t))">
+            Rename
+          </button>
+          <button
+            class="ctx-menu-item danger"
+            role="menuitem"
+            @click="pick((t) => emit('disband-team', t.id))"
+          >
+            Ungroup
+          </button>
+        </template>
+      </div>
+    </Teleport>
 
     <div
       class="ws-resize"
