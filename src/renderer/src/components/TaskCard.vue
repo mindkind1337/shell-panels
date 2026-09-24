@@ -8,6 +8,7 @@
 import { ref, computed, nextTick } from 'vue'
 import { COLUMNS } from '../../../shared/taskModel'
 import { moveTask, updateTask, removeTask, assignAgent } from '../taskBoardStore'
+import BrandIcon from './BrandIcon.vue'
 
 const props = defineProps({
   task: { type: Object, required: true },
@@ -68,7 +69,8 @@ const assignedPane = computed(
 
 // Display label for a pane: its title, falling back to the agent id.
 function paneLabel(pane) {
-  return pane.title || pane.agentId || pane.id
+  const name = pane.title || pane.agentId || pane.id
+  return pane.num ? `#${pane.num} ${name}` : name
 }
 </script>
 
@@ -108,7 +110,7 @@ function paneLabel(pane) {
         data-test="assignee"
         :style="{ '--accent': assignedPane.accent }"
       >
-        <span class="assignee-swatch"></span>{{ paneLabel(assignedPane) }}
+        <BrandIcon :kind="assignedPane.agentId || ''" :size="13" />{{ paneLabel(assignedPane) }}
       </span>
       <span v-else class="task-assignee unassigned" data-test="assignee">Unassigned</span>
     </div>

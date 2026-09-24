@@ -12,7 +12,9 @@
     "start": "node launch.mjs preview",
     "lint": "eslint . --fix",
     "format": "prettier --write .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "dist": "electron-vite build && electron-builder --win --x64",
+    "dist:dir": "electron-vite build && electron-builder --win --x64 --dir"
   },
   "dependencies": {
     "node-pty": "^1.1.0"
@@ -22,9 +24,11 @@
     "@vitejs/plugin-vue": "^6.0.7",
     "@vue/test-utils": "^2.4.11",
     "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-search": "^0.15.0",
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/xterm": "^5.5.0",
     "electron": "^42.4.0",
+    "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "eslint": "^10.5.0",
     "eslint-config-prettier": "^10.1.8",
@@ -36,5 +40,44 @@
     "vite": "^8.0.16",
     "vitest": "^4.1.9",
     "vue": "^3.5.13"
+  },
+  "build": {
+    "appId": "com.jeanclaudetrottier.shellpanels",
+    "productName": "Shell Panels",
+    "copyright": "Copyright (c) 2026 Jean-Claude Trottier",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/node-pty/**"
+    ],
+    "npmRebuild": false,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "Shell-Panels-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Shell Panels",
+      "uninstallDisplayName": "Shell Panels",
+      "deleteAppDataOnUninstall": false
+    }
   }
 }

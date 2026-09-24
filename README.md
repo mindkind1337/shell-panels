@@ -32,6 +32,40 @@ Built with **Electron + Vue 3 + xterm.js + node-pty**.
   own identity (accent colour, ◆ marker) and a live **Working / Idle** badge so a
   grid of agents tells you at a glance which are busy and which are waiting on
   you. Agent panes persist and re-launch with the workspace.
+- **One "New" menu** — the toolbar's New button (or the **+** on any pane)
+  opens a picker for every terminal and agent, with where to open it: to the
+  right, below, or in a new workspace. It also sets the default shell.
+- **Project folders** — give a workspace a folder and its new panes and agents
+  start there.
+- **"Needs you" alerts** — when an agent finishes a stretch of work while you
+  are looking elsewhere, you get a notification and an amber marker on the
+  pane and its workspace.
+- **Find, zoom, restart, drag and drop** — `Ctrl+Shift+F` finds text, `Ctrl+=`
+  and `Ctrl+-` zoom, exited panes offer Restart, and dropping files on a pane
+  types their paths.
+- **Settings** — the gear button (or `Ctrl+,`) sets the font, text size,
+  cursor, scrollback, default shell, copy-on-select, agent alerts, whether to
+  confirm before closing an agent, and whether to reopen workspaces at launch.
+- **Drag panes to rearrange** — drag a pane by its header onto another pane:
+  an edge places it on that side, the middle swaps the two, and a workspace in
+  the sidebar moves it there. `Esc` cancels.
+- **Tools** — the Tools button lists AI agents (Claude Code, Codex, Gemini,
+  OpenCode, Qwen Code, GitHub Copilot CLI, Amp, Aider) and developer tools
+  (Git, GitHub CLI, Node.js, Python, uv, ripgrep, PowerShell 7, VS Code,
+  Docker, Bun, jq), shows what's installed, and installs the rest in a pane
+  (npm or winget). You can also add any other agent command as your own.
+- **MCP servers** — the MCP button shows every server for Claude Code and Codex,
+  tests the real connection (and lists the server's tools), copies a server to
+  the other agent, helps you sign in, and has a searchable catalog of popular
+  servers (Playwright, Context7, GitHub, Sentry, Notion, Linear and more).
+- **Agents working together** — open an agent as a _separate copy_ (its own git
+  worktree and branch) so two agents can't overwrite each other, send selected
+  text from one pane to another, or ask one agent to review another's changes
+  (right-click a pane).
+- **Workspaces** — a left sidebar holds any number of workspaces, each with its
+  own split layout. Switching never stops or resizes a running shell or agent,
+  a green dot marks workspaces where an agent is working, and all workspaces are
+  restored on the next launch.
 - **Agent Task Board** — a built-in **kanban** side panel for tracking what each
   agent is working on. Toggle it with **`Ctrl+Shift+K`**. Add tasks, and move
   them across columns (e.g. _To Do → Doing → Done_) as the work progresses. The
@@ -62,6 +96,24 @@ npm run dev          # in one terminal
 node test-taskboard.cjs   # in another
 ```
 
+## Install (Windows)
+
+Build the installer, then run it:
+
+```sh
+npm install
+npm run dist     # writes dist/Shell-Panels-Setup-<version>.exe
+```
+
+The installer lets you choose the install folder and adds Start menu and
+desktop shortcuts. It is not code-signed, so Windows SmartScreen may warn the
+first time; choose **More info → Run anyway**. `npm run dist:dir` builds an
+unpacked copy in `dist/win-unpacked/` without the installer, which is quicker
+for testing.
+
+Saved workspaces, settings and tasks live in `%APPDATA%\shell-panels`, shared
+by the installed app and the dev build.
+
 ## Run it
 
 ```sh
@@ -75,13 +127,24 @@ A window titled **Shell Panels** opens with one PowerShell pane.
 
 ## Keyboard shortcuts
 
-| Shortcut       | Action            |
-| -------------- | ----------------- |
-| `Ctrl+Shift+E` | Split Right       |
-| `Ctrl+Shift+O` | Split Down        |
-| `Ctrl+Shift+W` | Close active pane |
-| `Ctrl+Shift+B` | Toggle Broadcast  |
-| `Ctrl+Shift+K` | Toggle Task Board |
+Press **F1** in the app for this list.
+
+| Shortcut                        | Action                            |
+| ------------------------------- | --------------------------------- |
+| `Ctrl+Shift+T`                  | New terminal (default shell)      |
+| `Ctrl+Shift+Space`              | Open a terminal or agent (picker) |
+| `Ctrl+Shift+E` / `Ctrl+Shift+O` | Split right / split down          |
+| `Ctrl+Shift+W`                  | Close pane                        |
+| `Ctrl+Shift+R`                  | Restart pane                      |
+| `Alt+Arrow`                     | Move focus between panes          |
+| `Ctrl+Shift+F`                  | Find in terminal                  |
+| `Ctrl+=` / `Ctrl+-` / `Ctrl+0`  | Bigger / smaller / reset text     |
+| `Ctrl+Shift+N`                  | New workspace                     |
+| `Ctrl+PageUp` / `Ctrl+PageDown` | Previous / next workspace         |
+| `Ctrl+Shift+B`                  | Toggle Broadcast                  |
+| `Ctrl+Shift+K`                  | Toggle Task Board                 |
+| `Ctrl+,`                        | Settings                          |
+| `F1`                            | Keyboard shortcuts                |
 
 ## How it works
 

@@ -1,0 +1,217 @@
+<script setup>
+// Preferences dialog. Edits the shared `settings` store directly, so every
+// change applies live to all panes and is saved automatically.
+import { ref, onMounted } from 'vue'
+import BrandIcon from './BrandIcon.vue'
+import { settings, FONT_FAMILIES, resetSettings, clamp } from '../settings'
+
+defineProps({
+  shells: { type: Array, default: () => [] },
+  defaultShell: { type: String, default: null }
+})
+const emit = defineEmits(['close', 'set-default-shell'])
+
+const cardEl = ref(null)
+const languages = ref([])
+
+onMounted(async () => {
+  if (cardEl.value) cardEl.value.focus()
+  if (window.shellApi.inputLanguages) {
+    try {
+      languages.value = (await window.shellApi.inputLanguages()) || []
+    } catch {
+      languages.value = []
+    }
+  }
+})
+
+function stepFont(d) {
+  settings.fontSize = clamp(settings.fontSize + d, 8, 28)
+}
+
+function setScrollback(e) {
+  const n = parseInt(e.target.value, 10)
+  if (Number.isFinite(n)) settings.scrollback = clamp(n, 500, 100000)
+  e.target.value = settings.scrollback
+}
+
+const CURSORS = [
+  { id: 'block', label: 'Block' },
+  { id: 'bar', label: 'Bar' },
+  { id: 'underline', label: 'Underline' }
+]
+</script>
+
+<template>
+  <div class="help-backdrop" @pointerdown.self="emit('close')">
+    <div
+      ref="cardEl"
+      class="help-card settings-card"
+      role="dialog"
+      aria-label="Settings"
+      tabindex="-1"
+      @keydown.escape.prevent.stop="emit('close')"
+    >
+      <div class="help-head">
+        <span>Settings</span>
+        <button class="tb-icon" title="Close (Esc)" @click="emit('close')">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path
+              d="M4 4l8 8M12 4l-8 8"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+            />
+          </svg>
+        </button>
+      </div>
+
+      <section class="set-section">
+        <h3>Text</h3>
+        <div class="set-row">
+          <div class="set-label">Font</div>
+          <select v-model="settings.fontFamily" class="set-select">
+            <option v-for="f in FONT_FAMILIES" :key="f" :value="f">{{ f }}</option>
+          </select>
+        </div>
+        <div class="set-row">
+          <div class="set-label">
+            Size
+            <span class="set-hint">Also Ctrl+= and Ctrl+-</span>
+          </div>
+          <div class="set-stepper">
+            <button title="Smaller" @click="stepFont(-1)">−</button>
+            <span>{{ settings.fontSize }}</span>
+            <button title="Bigger" @click="stepFont(1)">+</button>
+          </div>
+        </div>
+        <div class="set-row">
+          <div class="set-label">Cursor</div>
+          <div class="launch-seg set-seg">
+            <button
+              v-for="c in CURSORS"
+              :key="c.id"
+              class="launch-seg-btn"
+              :class="{ on: settings.cursorStyle === c.id }"
+              @click="settings.cursorStyle = c.id"
+            >
+              {{ c.label }}
+            </button>
+          </div>
+        </div>
+        <label class="set-row">
+          <div class="set-label">Blinking cursor</div>
+          <input v-model="settings.cursorBlink" type="checkbox" class="set-switch" />
+        </label>
+      </section>
+
+      <section class="set-section">
+        <h3>Terminal</h3>
+        <div class="set-row">
+          <div class="set-label">
+            Default shell <span class="set-hint">Agents run in it too</span>
+          </div>
+          <div class="set-shell">
+            <BrandIcon :kind="defaultShell || ''" :size="15" />
+            <select
+              class="set-select"
+              :value="defaultShell"
+              @change="emit('set-default-shell', $event.target.value)"
+            >
+              <option v-for="s in shells" :key="s.id" :value="s.id">{{ s.name }}</option>
+            </select>
+          </div>
+        </div>
+        <div class="set-row">
+          <div class="set-label">
+            Scrollback lines <span class="set-hint">Applies to new panes</span>
+          </div>
+          <input
+            class="set-number"
+            type="number"
+            min="500"
+            max="100000"
+            step="500"
+            :value="settings.scrollback"
+            @change="setScrollback"
+          />
+        </div>
+        <label class="set-row">
+          <div class="set-label">Copy text when you select it</div>
+          <input v-model="settings.copyOnSelect" type="checkbox" class="set-switch" />
+        </label>
+        <label class="set-row">
+          <div class="set-label">Ask before closing an agent pane</div>
+          <input v-model="settings.confirmCloseAgent" type="checkbox" class="set-switch" />
+        </label>
+        <label class="set-row">
+          <div class="set-label">
+            Reopen my workspaces at launch
+            <span class="set-hint">Off starts with a single terminal</span>
+          </div>
+          <input v-model="settings.restoreWorkspaces" type="checkbox" class="set-switch" />
+        </label>
+      </section>
+
+      <section class="set-section">
+        <h3>Agents</h3>
+        <label class="set-row">
+          <div class="set-label">
+            Resume conversations when panes reopen
+            <span class="set-hint"
+              >Claude Code and Codex continue where they left off after a restart, instead of
+              starting a new chat</span
+            >
+          </div>
+          <input v-model="settings.resumeAgents" type="checkbox" class="set-switch" />
+        </label>
+      </section>
+
+      <section class="set-section">
+        <h3>Voice typing</h3>
+        <div class="set-row">
+          <div class="set-label">
+            Language
+            <span class="set-hint"
+              >Windows dictation listens in one language. The mic button switches to this one first.
+              Add languages in Windows Settings, Time &amp; language.</span
+            >
+          </div>
+          <select
+            v-model="settings.voiceTip"
+            class="set-select"
+            @change="settings.voiceTipChosen = true"
+          >
+            <option value="">Current keyboard language</option>
+            <option v-for="l in languages.filter((x) => x.tip)" :key="l.tip" :value="l.tip">
+              {{ l.name }}
+            </option>
+          </select>
+        </div>
+      </section>
+
+      <section class="set-section">
+        <h3>Agent alerts</h3>
+        <label class="set-row">
+          <div class="set-label">
+            Windows notifications
+            <span class="set-hint">When an agent finishes while the app is in the background</span>
+          </div>
+          <input v-model="settings.desktopNotifications" type="checkbox" class="set-switch" />
+        </label>
+        <label class="set-row">
+          <div class="set-label">
+            In-app alerts
+            <span class="set-hint">When an agent finishes in a pane you aren't looking at</span>
+          </div>
+          <input v-model="settings.inAppAlerts" type="checkbox" class="set-switch" />
+        </label>
+      </section>
+
+      <div class="set-foot">
+        <span class="set-hint">Changes apply right away and are saved.</span>
+        <button class="exit-btn" @click="resetSettings">Reset to defaults</button>
+      </div>
+    </div>
+  </div>
+</template>

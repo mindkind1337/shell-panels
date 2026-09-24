@@ -1,13 +1,46 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 // Bridge a minimal, typed-ish API to the renderer. No node access leaks.
 const api = {
   listShells: () => ipcRenderer.invoke('shells:list'),
-  listAgents: () => ipcRenderer.invoke('agents:list'),
+  listAgents: (custom) => ipcRenderer.invoke('agents:list', custom),
+  refreshAgents: (custom) => ipcRenderer.invoke('agents:refresh', custom),
+  checkTools: (bins) => ipcRenderer.invoke('tools:check', bins),
+  toolStatus: () => ipcRenderer.invoke('tools:status'),
+  refreshPath: () => ipcRenderer.invoke('tools:refreshPath'),
   createPty: (opts) => ipcRenderer.invoke('pty:create', opts),
   writePty: (id, data) => ipcRenderer.send('pty:write', { id, data }),
   resizePty: (id, cols, rows) => ipcRenderer.send('pty:resize', { id, cols, rows }),
   killPty: (id) => ipcRenderer.send('pty:kill', { id }),
+
+  pickFolder: (opts) => ipcRenderer.invoke('dialog:pickFolder', opts),
+  homeDir: () => ipcRenderer.invoke('app:homeDir'),
+  systemLocale: () => ipcRenderer.invoke('app:systemLocale'),
+  log: (level, message) => ipcRenderer.send('log:write', { level, message }),
+  openLogs: () => ipcRenderer.invoke('logs:open'),
+  diagnostics: () => ipcRenderer.invoke('logs:diagnostics'),
+  claudeSessionExists: (id) => ipcRenderer.invoke('sessions:claudeExists', id),
+  findCodexSession: (query) => ipcRenderer.invoke('sessions:findCodex', query),
+  listSessions: (query) => ipcRenderer.invoke('sessions:list', query),
+  voiceTyping: (opts) => ipcRenderer.invoke('app:voiceTyping', opts),
+  inputLanguages: () => ipcRenderer.invoke('app:inputLanguages'),
+  openExternal: (url) => ipcRenderer.invoke('app:openExternal', url),
+  gitInfo: (cwd) => ipcRenderer.invoke('git:info', cwd),
+  createWorktree: (cwd, label) => ipcRenderer.invoke('git:createWorktree', { cwd, label }),
+  mcpList: (cwd) => ipcRenderer.invoke('mcp:list', cwd),
+  mcpAdd: (spec) => ipcRenderer.invoke('mcp:add', spec),
+  mcpRemove: (spec) => ipcRenderer.invoke('mcp:remove', spec),
+  mcpTest: (ref) => ipcRenderer.invoke('mcp:test', ref),
+  mcpCopy: (spec) => ipcRenderer.invoke('mcp:copy', spec),
+  notify: (payload) => ipcRenderer.send('app:notify', payload),
+  // Real filesystem path of a dropped File (File.path was removed in Electron 32).
+  pathForFile: (file) => {
+    try {
+      return webUtils.getPathForFile(file) || ''
+    } catch {
+      return ''
+    }
+  },
 
   readClipboard: () => ipcRenderer.invoke('clipboard:read'),
   writeClipboard: (text) => ipcRenderer.send('clipboard:write', text),
@@ -33,6 +66,11 @@ const api = {
     const handler = (_e, payload) => cb(payload)
     ipcRenderer.on('pty:exit', handler)
     return () => ipcRenderer.removeListener('pty:exit', handler)
+  },
+  onFocusPane: (cb) => {
+    const handler = (_e, payload) => cb(payload)
+    ipcRenderer.on('app:focusPane', handler)
+    return () => ipcRenderer.removeListener('app:focusPane', handler)
   }
 }
 
