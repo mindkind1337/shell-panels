@@ -2,7 +2,7 @@
 // Left sidebar listing workspaces. Each workspace is an independent split
 // layout with its own panes; switching never kills anything. The sidebar only
 // renders and emits intents: App owns the workspace state.
-import { ref, nextTick } from 'vue'
+import { ref, computed, nextTick } from 'vue'
 import BrandIcon from './BrandIcon.vue'
 
 const props = defineProps({
@@ -19,14 +19,15 @@ const props = defineProps({
   // Teams of agents: [{ id, name, color, members: [{ id, num, title, kind,
   // agentId, shellId, accent, where, here, state }] }]
   teams: { type: Array, default: () => [] },
-  // Agents in the current workspace that are in no team yet.
-  freeAgents: { type: Number, default: 0 }
+  // Agents in no team yet, current workspace first:
+  // [{ id, num, title, agentId, accent, where, here }]
+  candidates: { type: Array, default: () => [] }
 })
 
 const emit = defineEmits([
   'focus-pane',
-  'new-team',
-  'new-team-workspace',
+  'create-team',
+  'add-to-team',
   'rename-team',
   'gather-team',
   'disband-team',
@@ -176,6 +177,42 @@ function cancelTeamRename() {
   editingTeamId.value = null
 }
 
+// --- Teams: choose which agents go in a team ---------------------------------
+// false = closed; null = choosing for a new team; a team id = adding to it.
+const picking = ref(false)
+const picked = ref([])
+const pickTeam = computed(() => props.teams.find((t) => t.id === picking.value) || null)
+
+// Candidates by workspace, the current one first.
+const candidateGroups = computed(() => {
+  const groups = []
+  for (const c of props.candidates) {
+    let g = groups.find((x) => x.where === c.where)
+    if (!g) groups.push((g = { where: c.where, items: [] }))
+    g.items.push(c)
+  }
+  return groups
+})
+
+function startPick(teamId) {
+  picking.value = teamId
+  picked.value = []
+}
+
+function togglePicked(id) {
+  picked.value = picked.value.includes(id)
+    ? picked.value.filter((x) => x !== id)
+    : [...picked.value, id]
+}
+
+function finishPick() {
+  if (!picked.value.length) return
+  if (picking.value) emit('add-to-team', picking.value, picked.value.slice())
+  else emit('create-team', picked.value.slice())
+  picking.value = false
+  picked.value = []
+}
+
 // --- Teams: one message to every agent --------------------------------------
 const messagingTeamId = ref(null)
 const messageDraft = ref('')
@@ -209,7 +246,8 @@ defineExpose({
   startTeamMessage: (id) => {
     const team = props.teams.find((t) => t.id === id)
     if (team && messagingTeamId.value !== id) startTeamMessage(team)
-  }
+  },
+  startPick
 })
 </script>
 
@@ -363,28 +401,43 @@ defineExpose({
     <div v-if="!collapsed" class="ws-teams" aria-label="Teams">
       <div class="ws-head">
         <span class="ws-head-title">Teams</span>
-        <button
-          class="ws-icon-btn"
-          title="New team with the active pane"
-          @click="emit('new-team')"
-        >
+        <button class="ws-icon-btn" title="New team: choose its agents" @click="startPick(null)">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
           </svg>
         </button>
       </div>
-      <div v-if="!teams.length" class="ws-teams-empty">
+      <div v-if="!teams.length && picking === false" class="ws-teams-empty">
         <p>Agents that work together share a colour, notes and messages.</p>
-        <button
-          v-if="freeAgents > 1"
-          class="ws-teams-start"
-          @click="emit('new-team-workspace')"
-        >
-          Team up the {{ freeAgents }} agents here
-        </button>
-        <button class="ws-teams-start secondary" @click="emit('new-team')">
-          New team with the active pane
-        </button>
+        <button class="ws-teams-start" @click="startPick(null)">New team…</button>
+      </div>
+
+      <!-- Choose which agents go in a new team (or join an existing one). -->
+      <div v-if="picking !== false" class="ws-team-pick">
+        <div class="ws-team-pick-title">
+          {{ pickTeam ? `Add agents to ${pickTeam.name}` : 'New team: choose its agents' }}
+        </div>
+        <p v-if="!candidates.length" class="ws-team-pick-none">
+          Every agent is already in a team. Open an agent, or use a pane's ⋯ menu to move one.
+        </p>
+        <template v-for="g in candidateGroups" :key="g.where">
+          <div v-if="candidateGroups.length > 1" class="ws-team-pick-where">{{ g.where }}</div>
+          <label v-for="c in g.items" :key="c.id" class="ws-team-pick-item">
+            <input
+              type="checkbox"
+              :checked="picked.includes(c.id)"
+              @change="togglePicked(c.id)"
+            />
+            <BrandIcon :kind="c.agentId" :accent="c.accent" :label="c.title" :size="13" />
+            <span class="ws-team-member-name">{{ c.num ? `#${c.num} ` : '' }}{{ c.title }}</span>
+          </label>
+        </template>
+        <div class="ws-team-message-actions">
+          <button class="ws-team-message-cancel" @click="picking = false">Cancel</button>
+          <button class="ws-team-message-send" :disabled="!picked.length" @click="finishPick">
+            {{ pickTeam ? 'Add' : 'Create' }}{{ picked.length ? ` (${picked.length})` : '' }}
+          </button>
+        </div>
       </div>
       <div v-for="t in teams" :key="t.id" class="ws-team" :style="{ '--team': t.color }">
         <div class="ws-team-head">
@@ -407,6 +460,11 @@ defineExpose({
             >{{ t.name }}</span
           >
           <span class="ws-team-actions">
+            <button class="ws-icon-btn small" title="Add agents to this team" @click="startPick(t.id)">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+              </svg>
+            </button>
             <button class="ws-icon-btn small" title="Rename" @click="startTeamRename(t)">
               <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                 <path

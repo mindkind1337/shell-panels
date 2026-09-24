@@ -937,12 +937,7 @@ function buildCommands() {
       add('Team', `Add the active pane to ${t.name}`, () => joinTeam(active.id, t.id))
     }
   }
-  const wsAgents = freeAgentIds.value
-  if (wsAgents.length > 1) {
-    add('Team', 'New team with every agent in this workspace', () => newTeam(wsAgents), {
-      hint: `${wsAgents.length} agents`
-    })
-  }
+  add('Team', 'New team…', () => startTeamPick(null), { hint: 'Choose which agents are in it' })
   if (activeTeam) add('Team', `Remove the active pane from ${activeTeam.name}`, () => leaveTeam(active.id))
   for (const t of teams.value) {
     const n = teamMembers(t.id).length
@@ -2249,12 +2244,44 @@ function paneState(leaf) {
   return agentStatus[leaf.id] === 'busy' ? 'working' : 'ready'
 }
 
-// Agents of the current workspace that are in no team yet.
-const freeAgentIds = computed(() => {
-  const ids = []
-  forEachLeaf(tree.value, (l) => l.kind === 'agent' && !l.team && ids.push(l.id))
-  return ids
+// Agents in no team yet, for the sidebar's team picker: the current
+// workspace's first, then the others with the workspace they are in.
+const teamCandidates = computed(() => {
+  const out = []
+  const ordered = [
+    ...workspaces.value.filter((w) => w.id === currentWsId.value),
+    ...workspaces.value.filter((w) => w.id !== currentWsId.value)
+  ]
+  for (const ws of ordered) {
+    forEachLeaf(ws.tree, (l) => {
+      if (l.kind !== 'agent' || l.team) return
+      out.push({
+        id: l.id,
+        num: l.num || 0,
+        title: l.title || 'Agent',
+        agentId: l.agentId || null,
+        accent: l.accent || null,
+        where: ws.name,
+        here: ws.id === currentWsId.value
+      })
+    })
+  }
+  return out
 })
+
+// Open the sidebar's agent picker, for a new team (null) or to add to one.
+function startTeamPick(teamId) {
+  if (sidebarCollapsed.value) toggleSidebar()
+  nextTick(() => sidebarEl.value && sidebarEl.value.startPick(teamId))
+}
+
+function createTeamWith(ids) {
+  if (ids && ids.length) newTeam(ids)
+}
+
+function addToTeam(teamId, ids) {
+  for (const id of ids || []) joinTeam(id, teamId)
+}
 
 // Every team with its members and where they are, for the sidebar.
 const teamItems = computed(() =>
@@ -2901,10 +2928,10 @@ onBeforeUnmount(() => {
         :width="sidebarWidth"
         :sessions="sessionItems"
         :teams="teamItems"
-        :free-agents="freeAgentIds.length"
+        :candidates="teamCandidates"
         @focus-pane="focusPane"
-        @new-team="activeId && newTeam([activeId])"
-        @new-team-workspace="freeAgentIds.length && newTeam(freeAgentIds)"
+        @create-team="createTeamWith"
+        @add-to-team="addToTeam"
         @rename-team="renameTeam"
         @gather-team="gatherTeam"
         @disband-team="disbandTeam"

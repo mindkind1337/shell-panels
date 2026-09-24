@@ -3830,12 +3830,68 @@ body.pane-dragging * {
   cursor: pointer;
 }
 
-.ws-teams-start.secondary {
-  border-color: var(--border-strong);
-  background: transparent;
-  color: var(--text);
-}
 
 .ws-teams-start:hover {
   border-color: var(--accent);
+}
+
+/* Team picker: tick the agents that go in a team. */
+.ws-team-pick {
+  --team: var(--accent);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 8px 8px;
+  padding: 8px 8px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.ws-team-pick-title {
+  margin-bottom: 4px;
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ws-team-pick-none {
+  margin: 2px 0 6px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.ws-team-pick-where {
+  margin: 6px 0 2px;
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.ws-team-pick-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 26px;
+  padding: 0 4px;
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ws-team-pick-item:hover {
+  background: var(--surface-2);
+}
+
+.ws-team-pick-item input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.ws-team-pick .ws-team-message-actions {
+  margin-top: 6px;
 }
