@@ -11,8 +11,10 @@
 //   message          status: 'sent' | 'held' | 'delivered' | 'skipped'
 //                    source: 'you' | 'tessel'; scope: 'team' | 'workspace' | 'notes'
 //                    | 'team-change' | 'task'; teamId?, wsId?, preview
+//   agent.team       teamId (null: no team): the pane joined or left a team
 //   team             action: 'created' | 'renamed' | 'left' | 'closed' | 'ungrouped'
-//                    teamId, name, detail?
+//                    teamId, wsId, name, detail?
+// agent.state and agent.team carry the pane's teamId and wsId at that time.
 
 export const MAX_EVENTS = 20000
 export const MAX_AGE_MS = 30 * 24 * 3600 * 1000
@@ -66,18 +68,36 @@ export function authorMatches(author, agent) {
 
 // Everything the Activity view shows, for one scope and period.
 //   events   the log (any order)
-//   opts     { now, from, paneIds: Set | null (null = every pane),
-//              live: { [paneId]: { state, title, agentId } } for panes open now,
+//   opts     { now, from,
+//              teamId: count a pane only while it is in this team (membership
+//                at the time of each event, from agent.state / agent.team),
+//              wsId: count a pane only while it is in this workspace,
+//              (neither: every pane)
+//              live: { [paneId]: { state, title, agentId, teamId, wsId } } open now,
 //              journal: parseJournal() entries }
+// A row is shown for an agent open now (and in scope), or one with activity
+// in the period; spans started before the period still count their part in it.
 export function summarize(events, opts = {}) {
   const now = opts.now ?? Date.now()
   const from = opts.from ?? now - 7 * 24 * 3600 * 1000
-  const inScope = (id) => !opts.paneIds || opts.paneIds.has(id)
   const sorted = events.filter(isEvent).sort((a, b) => a.t - b.t)
 
-  const agents = new Map() // paneId -> row
+  // Is a pane, with this team and workspace, in the scope asked for?
+  const counts = (team, ws) => {
+    if (opts.teamId) return team === opts.teamId
+    if (opts.wsId) return ws === opts.wsId
+    return true
+  }
+
+  const stats = new Map() // paneId -> row (only shown if visible)
+  const visible = new Set()
+  // paneId -> { state, since: when this state began, seg: start of the part
+  // not counted yet, team, ws }
+  const cur = new Map()
+  const timeline = []
+
   const row = (id, agent) => {
-    let r = agents.get(id)
+    let r = stats.get(id)
     if (!r) {
       r = {
         paneId: id,
@@ -88,6 +108,7 @@ export function summarize(events, opts = {}) {
         since: null,
         ms: { working: 0, idle: 0, approval: 0, limited: 0 },
         approvals: 0,
+        waits: [],
         limits: 0,
         received: 0,
         held: 0,
@@ -95,7 +116,7 @@ export function summarize(events, opts = {}) {
         journal: 0,
         lastActivity: null
       }
-      agents.set(id, r)
+      stats.set(id, r)
     }
     if (agent) {
       r.title = agent.title || r.title
@@ -104,48 +125,74 @@ export function summarize(events, opts = {}) {
     return r
   }
 
-  const waits = [] // approval waits that ended in the period (ms)
-  const timeline = []
-  const current = new Map() // paneId -> { state, since }
-
-  const addSpan = (id, state, start, end) => {
-    const a = Math.max(start, from)
-    const b = Math.min(end, now)
-    if (b > a && row(id).ms[state] !== undefined) row(id).ms[state] += b - a
+  // Close the running segment of a pane at time t (adds its in-period part).
+  const closeSegment = (id, t) => {
+    const c = cur.get(id)
+    if (!c || !counts(c.team, c.ws)) return
+    const a = Math.max(c.seg, from)
+    const b = Math.min(t, now)
+    if (b > a && row(id).ms[c.state] !== undefined) {
+      row(id).ms[c.state] += b - a
+      visible.add(id)
+    }
   }
 
   for (const e of sorted) {
-    const id = e.paneId
-    if (id && !inScope(id)) continue
     if (e.t > now) continue
-    if (e.type === 'agent.state' && id) {
+    const id = e.paneId
+    const inPeriod = e.t >= from
+
+    if ((e.type === 'agent.state' || e.type === 'agent.team') && id) {
       const r = row(id, e.agent)
-      const prev = current.get(id)
-      if (prev) {
-        addSpan(id, prev.state, prev.since, e.t)
-        if (prev.state === 'approval' && e.state !== 'approval' && e.t >= from) {
-          waits.push(e.t - prev.since)
+      const prev = cur.get(id)
+      const team = e.teamId !== undefined ? e.teamId || null : prev?.team ?? null
+      const ws = e.wsId !== undefined && e.wsId !== null ? e.wsId : prev?.ws ?? null
+      const state = e.type === 'agent.state' ? e.state : prev?.state || 'idle'
+      closeSegment(id, e.t)
+      const was = prev && counts(prev.team, prev.ws)
+      const is = counts(team, ws)
+      if (e.type === 'agent.state' && prev && was && inPeriod) {
+        if (prev.state === 'approval' && state !== 'approval') {
+          r.waits.push(e.t - prev.since)
+          visible.add(id)
           timeline.push({ t: e.t, kind: 'approval-end', paneId: id, title: r.title, agentId: r.agentId, waited: e.t - prev.since })
         }
-        if (prev.state === 'limited' && e.state !== 'limited' && e.t >= from) {
+        if (prev.state === 'limited' && state !== 'limited') {
+          visible.add(id)
           timeline.push({ t: e.t, kind: 'limit-end', paneId: id, title: r.title, agentId: r.agentId })
         }
       }
-      if (e.t >= from && e.state === 'approval' && prev?.state !== 'approval') {
-        r.approvals++
-        timeline.push({ t: e.t, kind: 'approval', paneId: id, title: r.title, agentId: r.agentId })
+      if (e.type === 'agent.state' && is && inPeriod) {
+        if (state === 'approval' && prev?.state !== 'approval') {
+          r.approvals++
+          visible.add(id)
+          timeline.push({ t: e.t, kind: 'approval', paneId: id, title: r.title, agentId: r.agentId })
+        }
+        if (state === 'limited' && prev?.state !== 'limited') {
+          r.limits++
+          visible.add(id)
+          timeline.push({ t: e.t, kind: 'limit', paneId: id, title: r.title, agentId: r.agentId, reset: e.reset || '' })
+        }
+        if (state === 'working' || state === 'approval') {
+          r.lastActivity = e.t
+          visible.add(id)
+        }
+        if (state === 'closed') visible.add(id)
       }
-      if (e.t >= from && e.state === 'limited' && prev?.state !== 'limited') {
-        r.limits++
-        timeline.push({ t: e.t, kind: 'limit', paneId: id, title: r.title, agentId: r.agentId, reset: e.reset || '' })
-      }
-      if (!prev || prev.state !== e.state) current.set(id, { state: e.state, since: e.t })
-      if (e.t >= from && (e.state === 'working' || e.state === 'approval')) r.lastActivity = e.t
+      // The state's start moves only when the state changes; the counted part
+      // restarts at every event (it was just added up to now).
+      const since = !prev || prev.state !== state ? e.t : prev.since
+      cur.set(id, { state, since, seg: e.t, team, ws })
       continue
     }
+
     if (e.type === 'message' && id) {
+      const c = cur.get(id)
+      const team = c ? c.team : e.teamId || null
+      const ws = c ? c.ws : e.wsId || null
+      if (!inPeriod || !counts(team, ws)) continue
       const r = row(id, e.agent)
-      if (e.t < from) continue
+      visible.add(id)
       if (e.status === 'sent' || e.status === 'delivered') r.received++
       if (e.status === 'held') r.held++
       if (e.status === 'skipped') r.skipped++
@@ -165,61 +212,66 @@ export function summarize(events, opts = {}) {
       }
       continue
     }
-    if (e.type === 'team' && e.t >= from) {
-      if (opts.teamId && e.teamId !== opts.teamId) continue
+
+    if (e.type === 'team' && inPeriod) {
+      if (opts.teamId ? e.teamId !== opts.teamId : opts.wsId ? e.wsId !== opts.wsId : false) continue
       timeline.push({ t: e.t, kind: 'team', action: e.action, name: e.name, detail: e.detail || '' })
     }
   }
 
-  // Open spans run until now.
+  // Open agents: their running segment lasts until now.
   const live = opts.live || {}
-  for (const [id, cur] of current) {
-    const r = row(id)
-    const isOpen = !!live[id]
-    if (isOpen || cur.state !== 'closed') {
-      if (isOpen) addSpan(id, cur.state, cur.since, now)
-    }
-    r.state = isOpen ? live[id].state || cur.state : 'closed'
-    r.since = isOpen && (live[id].state || cur.state) === cur.state ? cur.since : null
-  }
   for (const [id, info] of Object.entries(live)) {
-    if (!inScope(id)) continue
+    const c = cur.get(id)
+    const team = c ? c.team : info.teamId || null
+    const ws = c ? c.ws : info.wsId || null
+    if (!counts(team, ws)) continue
     const r = row(id, info)
     r.open = true
-    if (!current.has(id)) {
+    visible.add(id)
+    if (c) {
+      closeSegment(id, now)
+      c.seg = now
+      r.state = info.state || c.state
+      r.since = r.state === c.state ? c.since : null
+    } else {
       r.state = info.state || 'idle'
-      r.since = null
     }
   }
 
   // Journal entries of the shared notes, by author.
   const journal = (opts.journal || []).filter((j) => Date.parse(j.date + 'T23:59:59') >= from)
   for (const j of journal) {
-    for (const r of agents.values()) if (authorMatches(j.author, r)) r.journal++
+    for (const id of visible) if (authorMatches(j.author, stats.get(id))) stats.get(id).journal++
     timeline.push({ t: Date.parse(j.date + 'T12:00:00'), day: j.date, kind: 'journal', author: j.author, preview: j.text })
   }
 
-  const rows = [...agents.values()].sort(
-    (a, b) => Number(b.open) - Number(a.open) || (b.lastActivity || 0) - (a.lastActivity || 0)
-  )
-  const open = rows.filter((r) => r.open)
-  const messages = rows.reduce(
-    (acc, r) => ({ received: acc.received + r.received, held: acc.held + r.held, skipped: acc.skipped + r.skipped }),
-    { received: 0, held: 0, skipped: 0 }
-  )
+  const rows = [...visible]
+    .map((id) => stats.get(id))
+    .sort((a, b) => Number(b.open) - Number(a.open) || (b.lastActivity || 0) - (a.lastActivity || 0))
   return {
     from,
     now,
-    cards: {
-      needsApproval: open.filter((r) => r.state === 'approval').length,
-      working: open.filter((r) => r.state === 'working').length,
-      openAgents: open.length,
-      approvalWait: { median: median(waits), count: waits.length },
-      messages
-    },
+    cards: cardsFor(rows),
     rows,
     timeline: timeline.sort((a, b) => b.t - a.t).slice(0, 300),
     empty: !rows.length && !timeline.length
+  }
+}
+
+// The four cards, for a set of rows (the view narrows rows by agent first).
+export function cardsFor(rows) {
+  const open = rows.filter((r) => r.open)
+  const waits = rows.flatMap((r) => r.waits || [])
+  return {
+    needsApproval: open.filter((r) => r.state === 'approval').length,
+    working: open.filter((r) => r.state === 'working').length,
+    openAgents: open.length,
+    approvalWait: { median: median(waits), count: waits.length },
+    messages: rows.reduce(
+      (acc, r) => ({ received: acc.received + r.received, held: acc.held + r.held, skipped: acc.skipped + r.skipped }),
+      { received: 0, held: 0, skipped: 0 }
+    )
   }
 }
 

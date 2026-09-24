@@ -5,13 +5,13 @@
 // and review work, they do not rank agents.
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import BrandIcon from './BrandIcon.vue'
-import { summarize, parseJournal, formatDuration } from '../../../shared/activity'
+import { summarize, cardsFor, parseJournal, formatDuration } from '../../../shared/activity'
 
 const props = defineProps({
   events: { type: Array, required: true },
   // Agents open now: { [paneId]: { state, title, agentId } }
   live: { type: Object, default: () => ({}) },
-  // Scope picker: [{ value, label, paneIds: Set | null, teamId, notesDir }]
+  // Scope picker: [{ value, label, wsId, teamId, notesDir }]
   scopes: { type: Array, default: () => [] },
   scope: { type: String, default: 'workspace' }
 })
@@ -83,19 +83,19 @@ onBeforeUnmount(() => {
 const summary = computed(() => {
   const ms = PERIODS.find((p) => p.value === period.value).ms
   const scope = current.value || {}
-  const live = {}
-  for (const [id, info] of Object.entries(props.live)) {
-    if (!scope.paneIds || scope.paneIds.has(id)) live[id] = info
-  }
   return summarize(props.events, {
     now: now.value,
     from: now.value - ms,
-    paneIds: scope.paneIds || null,
+    wsId: scope.wsId || null,
     teamId: scope.teamId || null,
-    live,
+    live: props.live,
     journal: journal.value
   })
 })
+
+const cards = computed(() =>
+  cardsFor(summary.value.rows.filter((r) => !agentFilter.value || r.paneId === agentFilter.value))
+)
 
 const rows = computed(() =>
   summary.value.rows.filter(
@@ -248,13 +248,13 @@ const periodLabel = computed(() => PERIODS.find((p) => p.value === period.value)
         <div class="act-cards">
           <button
             class="act-stat"
-            :class="{ on: stateFilter === 'approval', alert: summary.cards.needsApproval > 0 }"
+            :class="{ on: stateFilter === 'approval', alert: cards.needsApproval > 0 }"
             title="Show the agents waiting for your approval"
             @click="pickState('approval')"
           >
             <span class="act-stat-label">Need your approval now</span>
-            <span class="act-stat-value">{{ summary.cards.needsApproval }}</span>
-            <span class="act-stat-sub">of {{ summary.cards.openAgents }} open agents</span>
+            <span class="act-stat-value">{{ cards.needsApproval }}</span>
+            <span class="act-stat-sub">of {{ cards.openAgents }} open agents</span>
           </button>
           <button
             class="act-stat"
@@ -263,25 +263,25 @@ const periodLabel = computed(() => PERIODS.find((p) => p.value === period.value)
             @click="pickState('working')"
           >
             <span class="act-stat-label">Working now</span>
-            <span class="act-stat-value">{{ summary.cards.working }}</span>
-            <span class="act-stat-sub">of {{ summary.cards.openAgents }} open agents</span>
+            <span class="act-stat-value">{{ cards.working }}</span>
+            <span class="act-stat-sub">of {{ cards.openAgents }} open agents</span>
           </button>
           <div class="act-stat static">
             <span class="act-stat-label">Wait for your approval</span>
             <span class="act-stat-value">{{
-              summary.cards.approvalWait.count ? formatDuration(summary.cards.approvalWait.median) : '—'
+              cards.approvalWait.count ? formatDuration(cards.approvalWait.median) : '—'
             }}</span>
             <span class="act-stat-sub">{{
-              summary.cards.approvalWait.count
-                ? `median of ${summary.cards.approvalWait.count}, last ${periodLabel}`
+              cards.approvalWait.count
+                ? `median of ${cards.approvalWait.count}, last ${periodLabel}`
                 : `none answered, last ${periodLabel}`
             }}</span>
           </div>
           <div class="act-stat static">
             <span class="act-stat-label">Messages to agents</span>
-            <span class="act-stat-value">{{ summary.cards.messages.received }}</span>
+            <span class="act-stat-value">{{ cards.messages.received }}</span>
             <span class="act-stat-sub"
-              >{{ summary.cards.messages.held }} held · {{ summary.cards.messages.skipped }} not sent</span
+              >{{ cards.messages.held }} held · {{ cards.messages.skipped }} not sent</span
             >
           </div>
         </div>

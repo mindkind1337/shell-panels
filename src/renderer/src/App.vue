@@ -628,6 +628,7 @@ function closeLeaf(leafId, opts = {}) {
         type: 'team',
         action: 'closed',
         teamId: hadTeam,
+        wsId: ws ? ws.id : null,
         name: teamById(hadTeam).name,
         detail: closingTitle
       })
@@ -1980,24 +1981,14 @@ const activityScope = ref('workspace') // 'workspace' | 'team:<id>' | 'all'
 const activityScopes = computed(() => {
   const ws = currentWs.value
   const out = []
-  const idsWhere = (test) => {
-    const ids = new Set()
-    for (const e of activity) if (e.paneId && test(e)) ids.add(e.paneId)
-    return ids
-  }
   if (ws) {
-    const ids = idsWhere((e) => e.wsId === ws.id)
-    forEachLeaf(ws.tree, (l) => l.kind === 'agent' && ids.add(l.id))
-    out.push({ value: 'workspace', label: `Workspace: ${ws.name}`, paneIds: ids, teamId: null, notesDir: ws.cwd || null })
+    out.push({ value: 'workspace', label: `Workspace: ${ws.name}`, wsId: ws.id, teamId: null, notesDir: ws.cwd || null })
   }
   for (const t of teams.value) {
-    const ids = idsWhere((e) => e.teamId === t.id)
-    const members = teamMembers(t.id)
-    for (const l of members) ids.add(l.id)
-    const home = members[0] ? wsOfLeaf(members[0].id) : ws
-    out.push({ value: 'team:' + t.id, label: `Team: ${t.name}`, paneIds: ids, teamId: t.id, notesDir: (home && home.cwd) || null })
+    const home = workspaces.value.find((w) => w.id === teamWsId(t.id)) || ws
+    out.push({ value: 'team:' + t.id, label: `Team: ${t.name}`, wsId: null, teamId: t.id, notesDir: (home && home.cwd) || null })
   }
-  out.push({ value: 'all', label: 'All workspaces', paneIds: null, teamId: null, notesDir: (ws && ws.cwd) || null })
+  out.push({ value: 'all', label: 'All workspaces', wsId: null, teamId: null, notesDir: (ws && ws.cwd) || null })
   return out
 })
 
@@ -2058,6 +2049,24 @@ function deliverToAgent(leafId, text, meta = {}) {
   const queued = !!pendingMessages[leafId]?.includes(item)
   item.held = queued
   logMessage(leafId, queued ? 'held' : 'sent', text, meta)
+}
+
+// A pane joined (teamId) or left (null) a team.
+function logMembership(leaf, teamId) {
+  if (!leaf || leaf.kind !== 'agent') return
+  recordActivity({
+    type: 'agent.team',
+    paneId: leaf.id,
+    agent: agentInfo(leaf),
+    teamId: teamId || null,
+    wsId: wsOfLeaf(leaf.id)?.id || null
+  })
+}
+
+// The workspace a team works in (its first member's).
+function teamWsId(teamId) {
+  const m = teamMembers(teamId)[0]
+  return (m && wsOfLeaf(m.id)?.id) || currentWsId.value || null
 }
 
 function agentInfo(leaf) {
@@ -2165,6 +2174,7 @@ function createTeam(leafIds) {
     const leaf = findLeaf(id)
     if (leaf.team) leftFrom.set(leaf.team, [...(leftFrom.get(leaf.team) || []), leaf.title])
     leaf.team = team.id
+    logMembership(leaf, team.id)
   }
   pruneTeams()
   for (const [oldId, names] of leftFrom) {
@@ -2174,6 +2184,7 @@ function createTeam(leafIds) {
     type: 'team',
     action: 'created',
     teamId: team.id,
+    wsId: teamWsId(team.id),
     name: team.name,
     detail: ids.map((id) => findLeaf(id)?.title).join(', ')
   })
@@ -2189,7 +2200,7 @@ function renameTeam(teamId, name) {
   if (!team || !clean || clean === team.name) return
   const old = team.name
   team.name = clean
-  recordActivity({ type: 'team', action: 'renamed', teamId, name: clean, detail: old })
+  recordActivity({ type: 'team', action: 'renamed', teamId, wsId: teamWsId(teamId), name: clean, detail: old })
   tellTeam(teamId, `The team "${old}" is now called "${clean}".`)
 }
 
@@ -2198,10 +2209,12 @@ function leaveTeam(leafId) {
   if (!leaf || !leaf.team) return
   const teamId = leaf.team
   const name = teamById(teamId)?.name || 'the team'
+  const wsId = wsOfLeaf(leaf.id)?.id || null
   leaf.team = null
+  logMembership(leaf, null)
   pruneTeams()
   tellAgents([leaf], `[Tessel] You are no longer in team "${name}".`, teamId)
-  recordActivity({ type: 'team', action: 'left', teamId, name, detail: leaf.title })
+  recordActivity({ type: 'team', action: 'left', teamId, wsId, name, detail: leaf.title })
   if (teamById(teamId)) tellTeam(teamId, `${leaf.title} left the team.`)
 }
 
@@ -2209,11 +2222,15 @@ function leaveTeam(leafId) {
 function disbandTeam(teamId) {
   const team = teamById(teamId)
   const members = teamMembers(teamId)
-  for (const leaf of members) leaf.team = null
+  const wsId = teamWsId(teamId)
+  for (const leaf of members) {
+    leaf.team = null
+    logMembership(leaf, null)
+  }
   teams.value = teams.value.filter((t) => t.id !== teamId)
   if (team) {
     tellAgents(members, `[Tessel] Team "${team.name}" was ungrouped: you now work on your own.`, teamId)
-    recordActivity({ type: 'team', action: 'ungrouped', teamId, name: team.name })
+    recordActivity({ type: 'team', action: 'ungrouped', teamId, wsId, name: team.name })
   }
 }
 
