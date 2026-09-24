@@ -3892,3 +3892,13 @@ body.pane-dragging * {
   margin-left: auto;
   margin-right: 2px;
 }
+
+/* Sessions header: the count right after the title, icons at the right. */
+.ws-sessions .ws-head {
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.ws-icon-btn.on {
+  color: var(--accent);
+}

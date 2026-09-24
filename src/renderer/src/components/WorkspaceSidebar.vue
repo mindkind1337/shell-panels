@@ -370,6 +370,56 @@ defineExpose({
       <div class="ws-head">
         <span class="ws-head-title">Sessions</span>
         <span class="ws-sessions-count">{{ sessions.length }}</span>
+        <template v-if="sessions.some((s) => s.kind === 'agent')">
+          <button
+            class="ws-icon-btn ws-head-new"
+            :class="{ on: messagingId === currentId }"
+            title="Message all: one message, sent to each agent of this workspace (never to plain shells)"
+            aria-label="Message all agents"
+            @click="startMessage(currentId)"
+          >
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path
+                d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2v-7z"
+                stroke="currentColor"
+                stroke-width="1.4"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+          <button
+            class="ws-icon-btn"
+            title="Project notes: a shared notes file for the agents of this workspace"
+            aria-label="Project notes"
+            @click="emit('notes-ws', currentId)"
+          >
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path
+                d="M4 2.5h6l2.5 2.5v8.5H4v-11zM6 7h4.5M6 9.5h4.5"
+                stroke="currentColor"
+                stroke-width="1.4"
+                stroke-linejoin="round"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+        </template>
+      </div>
+      <div v-if="messagingId === currentId" class="ws-message">
+        <textarea
+          :ref="(el) => (messageEls[currentId] = el)"
+          v-model="messageDraft"
+          rows="3"
+          placeholder="Message every agent of this workspace… (Enter to send, Shift+Enter for a new line)"
+          @keydown.enter.exact.prevent="sendMessage"
+          @keydown.escape.prevent.stop="messagingId = null"
+        ></textarea>
+        <div class="ws-message-actions">
+          <button class="ws-message-cancel" @click="messagingId = null">Cancel</button>
+          <button class="ws-message-send" :disabled="!messageDraft.trim()" @click="sendMessage">
+            Send
+          </button>
+        </div>
       </div>
       <button
         v-for="s in sessions"
@@ -391,39 +441,6 @@ defineExpose({
         </span>
         <span class="ws-session-num">{{ s.num }}</span>
       </button>
-      <div v-if="sessions.some((s) => s.kind === 'agent')" class="ws-agents-actions">
-        <button
-          class="ws-agents-btn"
-          :class="{ on: messagingId === currentId }"
-          title="One message, sent to each agent of this workspace (never to plain shells)"
-          @click="startMessage(currentId)"
-        >
-          Message all
-        </button>
-        <button
-          class="ws-agents-btn"
-          title="A shared notes file for the agents of this workspace"
-          @click="emit('notes-ws', currentId)"
-        >
-          Project notes
-        </button>
-      </div>
-      <div v-if="messagingId === currentId" class="ws-message">
-        <textarea
-          :ref="(el) => (messageEls[currentId] = el)"
-          v-model="messageDraft"
-          rows="3"
-          placeholder="Message every agent of this workspace… (Enter to send, Shift+Enter for a new line)"
-          @keydown.enter.exact.prevent="sendMessage"
-          @keydown.escape.prevent.stop="messagingId = null"
-        ></textarea>
-        <div class="ws-message-actions">
-          <button class="ws-message-cancel" @click="messagingId = null">Cancel</button>
-          <button class="ws-message-send" :disabled="!messageDraft.trim()" @click="sendMessage">
-            Send
-          </button>
-        </div>
-      </div>
     </section>
 
     <div
