@@ -1990,6 +1990,7 @@ onBeforeUnmount(() => {
             stroke-linejoin="round"
           />
         </svg>
+        <span class="brand-name">Tessel</span>
       </div>
 
       <div class="split-btn launch-trigger" @pointerdown.stop>
