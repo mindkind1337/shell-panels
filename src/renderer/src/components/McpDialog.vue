@@ -7,7 +7,7 @@
 //   Custom    - any other server, by command or URL.
 // All changes go through each agent's own CLI, so the config stays in the
 // format each agent expects. Running agents load changes when restarted.
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, inject } from 'vue'
 import BrandIcon from './BrandIcon.vue'
 import { MCP_CATALOG, MCP_CATEGORIES, catalogSpec } from '../mcpCatalog'
 
@@ -141,8 +141,16 @@ async function copyTo(row, to) {
   refresh()
 }
 
+// Tessel's own confirmation (falls back to the system one outside the app).
+const askConfirm = inject('askConfirm', (o) => Promise.resolve(window.confirm(o.title)))
+
 async function remove(agent, s) {
-  if (!window.confirm(`Remove "${s.name}" from ${AGENT_NAME[agent]}?`)) return
+  const ok = await askConfirm({
+    title: `Remove "${s.name}" from ${AGENT_NAME[agent]}?`,
+    confirmLabel: 'Remove',
+    danger: true
+  })
+  if (!ok) return
   busy.value = `rm:${agent}:${s.name}`
   try {
     const res = await window.shellApi.mcpRemove({
