@@ -213,6 +213,11 @@ function startPicking(target = 'new') {
   picked.value = []
 }
 
+function cancelPicking() {
+  picking.value = false
+  picked.value = []
+}
+
 function canPick(x) {
   return x.kind === 'agent' && !x.team
 }
@@ -694,7 +699,7 @@ defineExpose({
               : 'Every agent here is already in a team. Use Leave in an agent’s ⋯ menu to free it.'
         }}</span>
         <div class="ws-message-actions">
-          <button class="ws-message-cancel" @click="startPicking">Cancel</button>
+          <button class="ws-message-cancel" @click="cancelPicking">Cancel</button>
           <button class="ws-message-send" :disabled="!picked.length" @click="groupPicked">
             {{ pickTeam ? `Add to ${pickTeam.name}` : 'Group as a team' }}
           </button>
