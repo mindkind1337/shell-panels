@@ -3880,3 +3880,9 @@ body.pane-dragging * {
   color: var(--text-dim);
   font-size: 11px;
 }
+
+/* With "Sessions" below, the workspace list takes only the room it needs, so
+   "New workspace" sits right under it instead of at the bottom. */
+.ws-sidebar:has(.ws-sessions) .ws-list {
+  flex: 0 1 auto;
+}
