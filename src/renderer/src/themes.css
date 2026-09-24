@@ -11,6 +11,7 @@
   --border-strong: #47544a;
   --accent: #aed5b2;
   --ui-accent: #aed5b2;
+  --green: #a1c8a7;
   --warn: #dbba87;
   --danger: #e5a6a0;
   --text: #dfe5df;
@@ -284,6 +285,230 @@
   background: var(--team, var(--ui-accent));
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--text-strong) 25%, transparent);
   vertical-align: middle;
+}
+
+/* Team directory in the sidebar: colored structure, compact controls, and
+   member status that remains distinct from the team identity color. */
+:root[data-theme='warp'] .ws-sidebar:has(.ws-teams) .ws-list {
+  flex: 0 1 auto;
+  max-height: 34%;
+}
+
+:root[data-theme='warp'] .ws-teams {
+  flex: 0 1 0;
+  min-height: 0;
+  max-height: 40%;
+  overflow-y: auto;
+  padding: 0 5px 7px;
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+:root[data-theme='warp'] .ws-teams .ws-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: 32px;
+  padding-inline: 6px;
+  background: var(--chrome);
+}
+
+:root[data-theme='warp'] .ws-teams .ws-head-title {
+  color: var(--text-dim);
+}
+
+:root[data-theme='warp'] .ws-teams .ws-icon-btn {
+  border-radius: 4px;
+}
+
+:root[data-theme='warp'] .ws-team {
+  margin: 2px 3px 6px;
+  padding: 3px 0;
+  border: 1px solid color-mix(in srgb, var(--team) 25%, var(--border));
+  border-left: 2px solid var(--team);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--team) 5%, var(--surface));
+}
+
+:root[data-theme='warp'] .ws-team-head {
+  min-height: 26px;
+  gap: 6px;
+  padding-inline: 8px 4px;
+}
+
+:root[data-theme='warp'] .ws-team-head .team-dot {
+  margin: 0 2px 0 0;
+}
+
+:root[data-theme='warp'] .ws-team-name {
+  color: var(--text-strong);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+:root[data-theme='warp'] .ws-team-actions {
+  gap: 1px;
+  opacity: 0.5;
+}
+
+:root[data-theme='warp'] .ws-team:hover .ws-team-actions,
+:root[data-theme='warp'] .ws-team:focus-within .ws-team-actions {
+  opacity: 1;
+}
+
+:root[data-theme='warp'] .ws-team-actions .ws-icon-btn {
+  width: 20px;
+  height: 20px;
+  min-height: 20px;
+}
+
+:root[data-theme='warp'] .ws-team-actions .ws-icon-btn:hover {
+  background: var(--surface-3);
+  color: var(--text-strong);
+}
+
+:root[data-theme='warp'] .ws-team-actions .ws-icon-btn.danger:hover {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  color: var(--danger);
+}
+
+:root[data-theme='warp'] .ws-team-member {
+  min-height: 26px;
+  gap: 6px;
+  padding: 3px 7px 3px 16px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+:root[data-theme='warp'] .ws-team-member:hover,
+:root[data-theme='warp'] .ws-team-member:focus-visible {
+  background: color-mix(in srgb, var(--team) 9%, var(--surface-2));
+}
+
+:root[data-theme='warp'] .ws-team-member:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: -2px;
+}
+
+:root[data-theme='warp'] .ws-team-member > svg {
+  flex: 0 0 auto;
+}
+
+:root[data-theme='warp'] .ws-team-member-name {
+  font-size: 11px;
+}
+
+:root[data-theme='warp'] .ws-team-member-where {
+  max-width: 45%;
+  font-size: 10px;
+}
+
+:root[data-theme='warp'] .ws-team-member.working .ws-team-member-where {
+  color: var(--green, #a1c8a7);
+}
+
+:root[data-theme='warp'] .ws-team-member.waiting .ws-team-member-where {
+  color: var(--warn);
+}
+
+:root[data-theme='warp'] .ws-team-message {
+  margin: 5px 7px 7px 15px;
+  padding: 7px;
+  border: 1px solid color-mix(in srgb, var(--team) 24%, var(--border));
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--team) 4%, var(--chrome));
+}
+
+:root[data-theme='warp'] .ws-team-message textarea {
+  display: block;
+  width: 100%;
+  min-height: 58px;
+  padding: 7px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--term);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+:root[data-theme='warp'] .ws-team-message textarea:focus {
+  border-color: var(--team);
+  outline: 1px solid color-mix(in srgb, var(--team) 30%, transparent);
+}
+
+:root[data-theme='warp'] .ws-team-message-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+:root[data-theme='warp'] .ws-team-message-actions button {
+  min-height: 24px;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+:root[data-theme='warp'] .ws-team-message-actions button:hover {
+  background: var(--surface-3);
+  color: var(--text-strong);
+}
+
+:root[data-theme='warp'] .ws-team-message-actions .ws-team-message-send {
+  border-color: color-mix(in srgb, var(--team) 50%, var(--border));
+  background: color-mix(in srgb, var(--team) 15%, var(--surface));
+  color: var(--text-strong);
+}
+
+:root[data-theme='warp'] .ws-team-message-actions .ws-team-message-send:hover {
+  background: color-mix(in srgb, var(--team) 24%, var(--surface));
+}
+
+:root[data-theme='warp'] .ws-team-message-actions button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+:root[data-theme='warp'] .pane-limit {
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--danger) 32%, var(--border));
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--danger) 11%, var(--surface));
+  color: var(--danger);
+  font-size: 10px;
+  line-height: 15px;
+}
+
+:root[data-theme='warp'] .ws-team-member.limited .ws-team-member-where,
+:root[data-theme='warp'] .ws-session.limited .ws-session-state {
+  color: var(--danger);
+}
+
+@media (max-width: 1000px) {
+  :root[data-theme='warp'] .ws-teams {
+    padding-inline: 2px;
+  }
+
+  :root[data-theme='warp'] .ws-team {
+    margin-inline: 1px;
+  }
+
+  :root[data-theme='warp'] .ws-team-actions .ws-icon-btn {
+    width: 18px;
+  }
+
+  :root[data-theme='warp'] .ws-team-member {
+    padding-left: 9px;
+  }
 }
 
 /* If a badge contains the shared dot, keep it legible beside the team name. */
