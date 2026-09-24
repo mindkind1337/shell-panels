@@ -1157,23 +1157,36 @@ function ensureDevShortcut() {
 // focuses the first instead. The installed app and the dev build have their
 // own data folders (see DATA_DIR), so one of each can run side by side.
 // (TESSEL_USER_DATA gives tests their own data, so they get their own lock.)
-const gotInstanceLock = app.requestSingleInstanceLock()
-if (!gotInstanceLock) {
-  // Quit without touching the terminal host: it belongs to the running copy.
-  log.info('app', 'another Tessel is already running: focusing it and exiting')
-  shutdownDone = true
-  app.quit()
-} else {
+// In the dev build, electron-vite restarts the app on every code change and
+// can start the new copy a moment before the old one has exited. The new copy
+// then found the old one's lock and quit, and electron-vite (which stops when
+// its app exits) stopped with it. So the dev build waits a few seconds for
+// the lock instead of giving up at once.
+async function acquireInstanceLock() {
+  if (app.requestSingleInstanceLock()) return true
+  if (app.isPackaged) return false
+  const until = Date.now() + 8000
+  while (Date.now() < until) {
+    await new Promise((r) => setTimeout(r, 250))
+    if (app.requestSingleInstanceLock()) return true
+  }
+  return false
+}
+
+Promise.all([acquireInstanceLock(), app.whenReady()]).then(([gotInstanceLock]) => {
+  if (!gotInstanceLock) {
+    // Quit without touching the terminal host: it belongs to the running copy.
+    log.info('app', 'another Tessel is already running: focusing it and exiting')
+    shutdownDone = true
+    app.quit()
+    return
+  }
   app.on('second-instance', () => {
     if (!mainWindow) return
     if (mainWindow.isMinimized()) mainWindow.restore()
     mainWindow.show()
     mainWindow.focus()
   })
-}
-
-app.whenReady().then(() => {
-  if (!gotInstanceLock) return
   log.info(
     'app',
     `started v${app.getVersion()} (${app.isPackaged ? 'installed' : 'dev'}) electron ${process.versions.electron} node ${process.versions.node} ${process.platform} ${os.release()} ${os.arch()}`
