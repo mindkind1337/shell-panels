@@ -119,7 +119,8 @@ const limit = computed(() => limits[props.node.id] || null)
 const asksApproval = computed(() => !!approvals[props.node.id])
 
 // The team this pane is in (a named, coloured group of agents), if any.
-const team = computed(() => ctx.teamById(props.node.team))
+// (Checked: in the dev build this file can reload before App.vue provides it.)
+const team = computed(() => (ctx.teamById ? ctx.teamById(props.node.team) : null))
 const paneStyle = computed(() => {
   const style = {}
   if (isAgent.value) style['--accent'] = props.node.accent
