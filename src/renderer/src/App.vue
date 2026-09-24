@@ -942,7 +942,7 @@ function buildCommands() {
   for (const t of teams.value) {
     const n = teamMembers(t.id).length
     add('Team', `Gather ${t.name}`, () => gatherTeam(t.id), {
-      hint: `Side by side in their own workspace (${n} ${n === 1 ? 'pane' : 'panes'})`
+      hint: `Bring its ${n} ${n === 1 ? 'pane' : 'panes'} here, side by side`
     })
     add('Team', `Message ${t.name}`, () => startTeamMessage(t.id), {
       hint: 'One message to every agent of the team'
@@ -1973,38 +1973,57 @@ function disbandTeam(teamId) {
   showToast(`${team.name} disbanded. Its panes stay where they are.`, { timeout: 3000 })
 }
 
-// "Réunir": the members side by side in a workspace named after the team.
+// "Réunir": bring the members into one workspace, next to each other. That is
+// the current workspace when a member is in it, else the first member's. No
+// workspace is created.
 function gatherTeam(teamId) {
   const team = teamById(teamId)
   const members = teamMembers(teamId)
   if (!team || !members.length) return
-  const homes = new Set(members.map((l) => wsOfLeaf(l.id)))
-  if (homes.size === 1) {
-    const home = [...homes][0]
-    let count = 0
-    forEachLeaf(home.tree, () => count++)
-    if (count === members.length) {
-      selectWorkspace(home.id)
-      return
-    }
+  const here = currentWs.value
+  const target =
+    here && members.some((l) => wsOfLeaf(l.id) === here) ? here : wsOfLeaf(members[0].id)
+  if (!target) return
+  const away = members.filter((l) => wsOfLeaf(l.id) !== target)
+  for (const leaf of away) {
+    const from = wsOfLeaf(leaf.id)
+    const rest = removeLeaf(from.tree, leaf.id)
+    from.tree = rest
+    if (from.activeId === leaf.id) from.activeId = rest ? firstLeafId(rest) : null
+    if (!rest) dropEmptiedWorkspace(from)
+    // Split next to the last member already here.
+    let anchor = null
+    forEachLeaf(target.tree, (l) => {
+      if (l.team === teamId) anchor = l.id
+    })
+    const pair = (orig) =>
+      reactive({ type: 'split', id: newId('split'), dir: 'row', sizes: [50, 50], children: [orig, leaf] })
+    target.tree = !target.tree
+      ? leaf
+      : anchor
+        ? replaceNode(target.tree, anchor, pair)
+        : pair(target.tree)
   }
-  const ws = makeWorkspace(team.name)
-  ws.cwd = wsOfLeaf(members[0].id)?.cwd || null
-  for (const leaf of members) detachLeaf(wsOfLeaf(leaf.id), leaf.id)
-  ws.tree =
-    members.length === 1
-      ? members[0]
-      : reactive({
-          type: 'split',
-          id: newId('split'),
-          dir: 'row',
-          sizes: members.map(() => 100 / members.length),
-          children: members
-        })
-  ws.activeId = members[0].id
-  workspaces.value.push(ws)
-  selectWorkspace(ws.id)
+  selectWorkspace(target.id)
+  target.activeId = members[0].id
   refitSoon()
+  if (!away.length) showToast(`${team.name} is already together in ${target.name}.`, { timeout: 2500 })
+}
+
+// A workspace that a gather left without panes goes away, unless tasks still
+// belong to it: then it gets a fresh shell, like any emptied workspace.
+function dropEmptiedWorkspace(ws) {
+  if (boardTasks.some((t) => t.wsId === ws.id)) {
+    createLeaf(selectedShell.value, null, ws.cwd).then((leaf) => {
+      if (leaf && !ws.tree) {
+        ws.tree = leaf
+        ws.activeId = leaf.id
+      }
+    })
+    return
+  }
+  const idx = workspaces.value.indexOf(ws)
+  if (idx >= 0) workspaces.value.splice(idx, 1)
 }
 
 // --- Team messages ------------------------------------------------------------

@@ -506,7 +506,7 @@ defineExpose({
             </button>
             <button
               class="ws-icon-btn small"
-              title="Gather: side by side in a workspace named after the team"
+              title="Gather: bring the team's panes into this workspace, side by side"
               @click="emit('gather-team', t.id)"
             >
               <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
