@@ -21,6 +21,11 @@ const api = {
   pickFolder: (opts) => ipcRenderer.invoke('dialog:pickFolder', opts),
   projectNotes: (opts) => ipcRenderer.invoke('notes:ensure', opts),
   openProjectNotes: (opts) => ipcRenderer.invoke('notes:open', opts),
+  readProjectNotes: (dir) => ipcRenderer.invoke('notes:read', dir),
+  activity: {
+    load: () => ipcRenderer.invoke('activity:load'),
+    save: (events) => ipcRenderer.invoke('activity:save', events)
+  },
   homeDir: () => ipcRenderer.invoke('app:homeDir'),
   systemLocale: () => ipcRenderer.invoke('app:systemLocale'),
   log: (level, message) => ipcRenderer.send('log:write', { level, message }),

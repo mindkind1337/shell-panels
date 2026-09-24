@@ -24,6 +24,8 @@ import {
   clearAttention
 } from './agentStatus'
 import { detectApproval } from './agentLimit'
+import { activity, recordActivity, loadActivity, saveActivityNow } from './activityStore'
+import ActivityPanel from './components/ActivityPanel.vue'
 import { dropBuffer, seedBuffer } from './ptyStore'
 import { tasks as boardTasks, setTasks, updateTask, removeTask } from './taskBoardStore'
 
@@ -621,7 +623,16 @@ function closeLeaf(leafId, opts = {}) {
   if (hadTeam) {
     pruneTeams()
     // Its teammates hear it is gone, as with "Leave".
-    if (teamById(hadTeam)) tellTeam(hadTeam, `${closingTitle} was closed and left the team.`)
+    if (teamById(hadTeam)) {
+      recordActivity({
+        type: 'team',
+        action: 'closed',
+        teamId: hadTeam,
+        name: teamById(hadTeam).name,
+        detail: closingTitle
+      })
+      tellTeam(hadTeam, `${closingTitle} was closed and left the team.`)
+    }
   }
 }
 
@@ -784,6 +795,7 @@ async function installUpdate() {
   updateInstalling.value = true
   // Write everything now instead of waiting for the debounced saves.
   saveLayoutNow()
+  await saveActivityNow()
   if (taskSaveTimer) {
     clearTimeout(taskSaveTimer)
     taskSaveTimer = null
@@ -939,6 +951,9 @@ function buildCommands() {
     const wsId = currentWs.value.id
     add('Workspace', 'Message every agent in this workspace', () => startWsMessage(wsId), {
       hint: 'One message, sent to each agent (never to plain shells)'
+    })
+    add('Workspace', 'Activity of the agents', () => openActivity('workspace'), {
+      hint: 'Messages, approvals, limits and working time'
     })
     add('Workspace', 'Open project notes', () => openProjectNotes(wsId), {
       hint: 'The notes file the agents of this workspace share'
@@ -1893,6 +1908,105 @@ const workspaceItems = computed(() =>
   })
 )
 
+// Every open agent's state, for the activity log and the Activity view.
+const agentStates = computed(() => {
+  const out = {}
+  forEachWsLeaf((leaf) => {
+    if (leaf.kind !== 'agent') return
+    let state = 'idle'
+    if (approvals[leaf.id]) state = 'approval'
+    else if (limits[leaf.id]) state = 'limited'
+    else if (agentStatus[leaf.id] === 'busy') state = 'working'
+    out[leaf.id] = {
+      state,
+      title: leaf.title || 'Agent',
+      agentId: leaf.agentId || null,
+      reset: limits[leaf.id] ? limits[leaf.id].reset : '',
+      wsId: wsOfLeaf(leaf.id)?.id || null,
+      teamId: leaf.team || null
+    }
+  })
+  return out
+})
+
+// Log state changes. A burst of work shorter than 3 s (typing echoes, a
+// redraw) is not logged, so the log shows real stretches of work.
+const loggedState = {}
+const workingTimers = {}
+function logState(id, info, state) {
+  if (loggedState[id] === state) return
+  loggedState[id] = state
+  recordActivity({
+    type: 'agent.state',
+    paneId: id,
+    agent: info ? { title: info.title, agentId: info.agentId } : null,
+    state,
+    reset: info && state === 'limited' ? info.reset : undefined,
+    wsId: info ? info.wsId : null,
+    teamId: info ? info.teamId : null
+  })
+}
+watch(
+  agentStates,
+  (now, before = {}) => {
+    for (const [id, info] of Object.entries(now)) {
+      if (before[id] && before[id].state === info.state) continue
+      clearTimeout(workingTimers[id])
+      if (info.state === 'working' && loggedState[id] !== 'working') {
+        workingTimers[id] = setTimeout(() => {
+          if (agentStates.value[id]?.state === 'working') logState(id, agentStates.value[id], 'working')
+        }, 3000)
+      } else if (info.state !== 'working') {
+        logState(id, info, info.state)
+      }
+    }
+    for (const id of Object.keys(before)) {
+      if (!now[id]) {
+        clearTimeout(workingTimers[id])
+        logState(id, before[id], 'closed')
+        delete loggedState[id]
+      }
+    }
+  },
+  { immediate: true }
+)
+
+// --- Activity view -------------------------------------------------------------
+const activityOpen = ref(false)
+const activityScope = ref('workspace') // 'workspace' | 'team:<id>' | 'all'
+
+// What the Activity view can show: this workspace, one of its teams, or all.
+// A scope's panes include agents closed since (found through the log).
+const activityScopes = computed(() => {
+  const ws = currentWs.value
+  const out = []
+  const idsWhere = (test) => {
+    const ids = new Set()
+    for (const e of activity) if (e.paneId && test(e)) ids.add(e.paneId)
+    return ids
+  }
+  if (ws) {
+    const ids = idsWhere((e) => e.wsId === ws.id)
+    forEachLeaf(ws.tree, (l) => l.kind === 'agent' && ids.add(l.id))
+    out.push({ value: 'workspace', label: `Workspace: ${ws.name}`, paneIds: ids, teamId: null, notesDir: ws.cwd || null })
+  }
+  for (const t of teams.value) {
+    const ids = idsWhere((e) => e.teamId === t.id)
+    const members = teamMembers(t.id)
+    for (const l of members) ids.add(l.id)
+    const home = members[0] ? wsOfLeaf(members[0].id) : ws
+    out.push({ value: 'team:' + t.id, label: `Team: ${t.name}`, paneIds: ids, teamId: t.id, notesDir: (home && home.cwd) || null })
+  }
+  out.push({ value: 'all', label: 'All workspaces', paneIds: null, teamId: null, notesDir: (ws && ws.cwd) || null })
+  return out
+})
+
+function openActivity(scope = 'workspace') {
+  closeMenus()
+  activityScope.value = scope
+  activityOpen.value = true
+}
+
 // "Needs you": everything an agent is waiting on you for, across workspaces:
 // approval prompts first, then finished work, then usage limits.
 const inboxItems = computed(() => {
@@ -1934,10 +2048,37 @@ function awaitingApproval(leafId) {
 const pendingMessages = reactive({})
 let pendingTimer = null
 
-function deliverToAgent(leafId, text) {
+// meta: { source: 'you' | 'tessel', scope: 'team' | 'workspace' | 'notes' |
+// 'team-change', teamId } for the activity log.
+function deliverToAgent(leafId, text, meta = {}) {
+  const item = { text, meta, held: false }
   if (!pendingMessages[leafId]) pendingMessages[leafId] = []
-  pendingMessages[leafId].push(text)
+  pendingMessages[leafId].push(item)
   flushPending()
+  const queued = !!pendingMessages[leafId]?.includes(item)
+  item.held = queued
+  logMessage(leafId, queued ? 'held' : 'sent', text, meta)
+}
+
+function agentInfo(leaf) {
+  return leaf ? { title: leaf.title || 'Agent', agentId: leaf.agentId || null } : null
+}
+
+function logMessage(leafId, status, text, meta = {}) {
+  const leaf = findLeaf(leafId)
+  recordActivity({
+    type: 'message',
+    paneId: leafId,
+    agent: agentInfo(leaf),
+    status,
+    source: meta.source || 'you',
+    scope: meta.scope || 'workspace',
+    teamId: meta.teamId || null,
+    wsId: wsOfLeaf(leafId)?.id || null,
+    preview: String(text || '')
+      .replace(/\s+/g, ' ')
+      .slice(0, 160)
+  })
 }
 
 // Paste each queued message and press Enter, except into panes that are
@@ -1956,10 +2097,11 @@ function flushPending() {
     }
     const queue = pendingMessages[id]
     delete pendingMessages[id]
-    queue.forEach((text, i) =>
+    queue.forEach((item, i) =>
       setTimeout(() => {
-        pane.paste(text)
+        pane.paste(item.text)
         setTimeout(() => pane.submit(), 500)
+        if (item.held) logMessage(id, 'delivered', item.text, item.meta)
       }, i * 1500)
     )
   }
@@ -2028,6 +2170,13 @@ function createTeam(leafIds) {
   for (const [oldId, names] of leftFrom) {
     if (teamById(oldId)) tellTeam(oldId, `${names.join(', ')} left the team.`)
   }
+  recordActivity({
+    type: 'team',
+    action: 'created',
+    teamId: team.id,
+    name: team.name,
+    detail: ids.map((id) => findLeaf(id)?.title).join(', ')
+  })
   tellTeam(team.id, null, { welcome: true })
   return team
 }
@@ -2040,6 +2189,7 @@ function renameTeam(teamId, name) {
   if (!team || !clean || clean === team.name) return
   const old = team.name
   team.name = clean
+  recordActivity({ type: 'team', action: 'renamed', teamId, name: clean, detail: old })
   tellTeam(teamId, `The team "${old}" is now called "${clean}".`)
 }
 
@@ -2050,7 +2200,8 @@ function leaveTeam(leafId) {
   const name = teamById(teamId)?.name || 'the team'
   leaf.team = null
   pruneTeams()
-  tellAgents([leaf], `[Tessel] You are no longer in team "${name}".`)
+  tellAgents([leaf], `[Tessel] You are no longer in team "${name}".`, teamId)
+  recordActivity({ type: 'team', action: 'left', teamId, name, detail: leaf.title })
   if (teamById(teamId)) tellTeam(teamId, `${leaf.title} left the team.`)
 }
 
@@ -2060,7 +2211,10 @@ function disbandTeam(teamId) {
   const members = teamMembers(teamId)
   for (const leaf of members) leaf.team = null
   teams.value = teams.value.filter((t) => t.id !== teamId)
-  if (team) tellAgents(members, `[Tessel] Team "${team.name}" was ungrouped: you now work on your own.`)
+  if (team) {
+    tellAgents(members, `[Tessel] Team "${team.name}" was ungrouped: you now work on your own.`, teamId)
+    recordActivity({ type: 'team', action: 'ungrouped', teamId, name: team.name })
+  }
 }
 
 // Tell a team's agents what changed. With { welcome: true }, each member
@@ -2072,7 +2226,7 @@ async function tellTeam(teamId, text, opts = {}) {
   const members = teamMembers(teamId).filter((l) => l.kind === 'agent')
   if (!members.length) return
   if (!opts.welcome) {
-    tellAgents(members, `[Tessel] Team "${team.name}": ${text}`)
+    tellAgents(members, `[Tessel] Team "${team.name}": ${text}`, teamId)
     return
   }
   const ws = wsOfLeaf(members[0].id)
@@ -2091,7 +2245,8 @@ async function tellTeam(teamId, text, opts = {}) {
         (notes
           ? ` Shared notes: ${notes} . Read them, agree there on who does what, and add a dated line to their Journal for each notable change.`
           : '') +
-        ' Before editing a file a teammate may be editing, check with them. Do not commit the notes file.'
+        ' Before editing a file a teammate may be editing, check with them. Do not commit the notes file.',
+      teamId
     )
   }
   const told = members.filter((l) => !limits[l.id]).length
@@ -2101,25 +2256,28 @@ async function tellTeam(teamId, text, opts = {}) {
 }
 
 // Deliver a note from Tessel to some agents; ones out of usage are skipped.
-function tellAgents(list, text) {
+function tellAgents(list, text, teamId = null) {
+  const meta = { source: 'tessel', scope: 'team-change', teamId }
   for (const leaf of list) {
-    if (leaf.kind === 'agent' && !limits[leaf.id]) deliverToAgent(leaf.id, text)
+    if (leaf.kind !== 'agent') continue
+    if (limits[leaf.id]) logMessage(leaf.id, 'skipped', text, meta)
+    else deliverToAgent(leaf.id, text, meta)
   }
 }
 
 function messageTeam(teamId, text) {
   const team = teamById(teamId)
-  if (team) messageAgents(teamMembers(teamId), text, team.name)
+  if (team) messageAgents(teamMembers(teamId), text, team.name, { scope: 'team', teamId })
 }
 
 // Send one message to every agent of a workspace (never to plain shells,
 // which would run it as a command).
 function messageWorkspace(wsId, text) {
   const ws = workspaces.value.find((w) => w.id === wsId)
-  if (ws) messageAgents(wsAgents(wsId), text, ws.name)
+  if (ws) messageAgents(wsAgents(wsId), text, ws.name, { scope: 'workspace' })
 }
 
-function messageAgents(list, text, where) {
+function messageAgents(list, text, where, meta = {}) {
   const body = String(text || '').trim()
   if (!body) return
   const agents = list.filter((l) => l.kind === 'agent')
@@ -2130,7 +2288,8 @@ function messageAgents(list, text, where) {
   // Agents out of usage would not act on it: skip them and say so.
   const limited = agents.filter((l) => limits[l.id])
   const reached = agents.filter((l) => !limits[l.id])
-  for (const leaf of reached) deliverToAgent(leaf.id, body)
+  for (const leaf of reached) deliverToAgent(leaf.id, body, meta)
+  for (const leaf of limited) logMessage(leaf.id, 'skipped', body, meta)
   const held = reached.filter((l) => pendingMessages[l.id])
   const names = (list) => list.map((l) => l.title).join(', ')
   const parts = [`Sent to ${reached.length - held.length} of ${agents.length} agents.`]
@@ -2260,7 +2419,8 @@ async function shareProjectNotes(wsId) {
       `[Tessel] Other agents in this project: ${others || 'none yet'}.` +
         ` Shared notes: ${res.path} . Read that file now, agree there on who does what, ` +
         'and add a dated line to its Journal section for each notable change. ' +
-        'Before editing a file another agent may be editing, check the notes. Do not commit that file.'
+        'Before editing a file another agent may be editing, check the notes. Do not commit that file.',
+      { source: 'tessel', scope: 'notes' }
     )
   }
   const limited = agents.filter((l) => limits[l.id])
@@ -2552,6 +2712,7 @@ onMounted(async () => {
 
   // Persist on any structural / size / title / broadcast change (debounced).
   pruneTeams()
+  loadActivity()
   persistReady = true
   watch(
     [
@@ -2936,6 +3097,7 @@ onBeforeUnmount(() => {
         @rename-team="renameTeam"
         @disband-team="disbandTeam"
         @message-team="messageTeam"
+        @activity="openActivity"
         @focus-pane="focusPane"
         @message-ws="messageWorkspace"
         @notes-ws="openProjectNotes"
@@ -3068,6 +3230,16 @@ onBeforeUnmount(() => {
     />
 
     <CommandPalette v-if="paletteOpen" :commands="paletteCommands" @close="paletteOpen = false" />
+
+    <ActivityPanel
+      v-if="activityOpen"
+      v-model:scope="activityScope"
+      :events="activity"
+      :live="agentStates"
+      :scopes="activityScopes"
+      @focus-pane="(id) => ((activityOpen = false), focusPane(id))"
+      @close="activityOpen = false"
+    />
 
     <SettingsDialog
       v-if="settingsOpen"

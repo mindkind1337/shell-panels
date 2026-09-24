@@ -4,6 +4,7 @@ import os from 'os'
 import fs from 'fs'
 import { spawn, execFile, execFileSync } from 'child_process'
 import { loadTasks, saveTasks } from './taskBoardPersistence'
+import { trimEvents, isEvent } from '../shared/activity'
 import { claudeSessionExists, findCodexSession, listSessions } from './agentSessions'
 import { createLogger, describe } from './logger'
 import { cleanEnv } from './cleanEnv'
@@ -407,6 +408,43 @@ ipcMain.handle('taskboard:save', (_evt, tasks) => {
   } catch (err) {
     logCrashContext(`taskboard:save failed: ${err.message}`)
     return { ok: false, error: err.message }
+  }
+})
+
+// Activity of the agents (see src/shared/activity.js): its own activity.json,
+// written atomically (temp file + rename) and kept bounded.
+const activityFile = () => join(app.getPath('userData'), 'activity.json')
+ipcMain.handle('activity:load', () => {
+  try {
+    if (!fs.existsSync(activityFile())) return []
+    const data = JSON.parse(fs.readFileSync(activityFile(), 'utf8'))
+    return Array.isArray(data) ? trimEvents(data.filter(isEvent)) : []
+  } catch (err) {
+    log.warn('activity', `load failed: ${err.message}`)
+    return []
+  }
+})
+ipcMain.handle('activity:save', (_evt, events) => {
+  try {
+    if (!Array.isArray(events)) return { ok: false, error: 'not a list' }
+    const tmp = activityFile() + '.tmp'
+    fs.writeFileSync(tmp, JSON.stringify(trimEvents(events.filter(isEvent))), 'utf8')
+    fs.renameSync(tmp, activityFile())
+    return { ok: true }
+  } catch (err) {
+    log.warn('activity', `save failed: ${err.message}`)
+    return { ok: false, error: err.message }
+  }
+})
+
+// The shared notes of a project, read for the Activity view (journal lines).
+ipcMain.handle('notes:read', (_evt, dir) => {
+  try {
+    const file = join(String(dir || ''), '.tessel', 'notes.md')
+    if (!isAbsolute(file) || !fs.existsSync(file)) return ''
+    return fs.readFileSync(file, 'utf8').slice(0, 512 * 1024)
+  } catch {
+    return ''
   }
 })
 
