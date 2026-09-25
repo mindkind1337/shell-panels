@@ -2259,7 +2259,10 @@ function flushPending() {
         } catch {
           return failDelivery(item)
         }
-        setTimeout(() => {
+        // Press Enter; if the text still sits in the agent's input box a
+        // moment later (the key got lost, e.g. while the CLI was redrawing),
+        // press it again, twice at most. Only then is it delivered.
+        const submit = (tries) => {
           const q = getPane(id)
           // Never press Enter into an approval prompt.
           if (!q || awaitingApproval(id)) return failDelivery(item)
@@ -2268,14 +2271,29 @@ function flushPending() {
           } catch {
             return failDelivery(item)
           }
-          if (item.meta && item.meta.onDelivered) item.meta.onDelivered()
-        }, 500)
+          setTimeout(() => {
+            const r = getPane(id)
+            if (!r) return failDelivery(item)
+            if (tries < 2 && !awaitingApproval(id) && stillTyped(r, item.text)) return submit(tries + 1)
+            if (item.meta && item.meta.onDelivered) item.meta.onDelivered()
+          }, 1500)
+        }
+        setTimeout(() => submit(0), 500)
         if (item.held) logMessage(id, 'delivered', item.text, item.meta)
       }, i * 1500)
     )
   }
   clearTimeout(pendingTimer)
   pendingTimer = waiting ? setTimeout(flushPending, 2000) : null
+}
+
+// The end of a pasted message is still on the input line at the bottom of
+// the agent's screen: it was not submitted.
+function stillTyped(pane, text) {
+  if (!pane.screenText) return false
+  const tail = String(text || '').replace(/\s+/g, ' ').trim().slice(-24)
+  if (tail.length < 8) return false
+  return pane.screenText(4).replace(/\s+/g, ' ').includes(tail)
 }
 
 function failDelivery(item) {
