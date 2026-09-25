@@ -68,7 +68,9 @@ const api = {
     current: (args) => ipcRenderer.invoke('team:current', args),
     retire: (args) => ipcRenderer.invoke('team:retire', args),
     tasks: (args) => ipcRenderer.invoke('team:tasks', args),
-    requests: (args) => ipcRenderer.invoke('team:requests', args)
+    requests: (args) => ipcRenderer.invoke('team:requests', args),
+    requestsDone: (args) => ipcRenderer.invoke('team:requests-done', args),
+    messageStatus: (args) => ipcRenderer.invoke('team:message-status', args)
   },
   review: {
     info: (args) => ipcRenderer.invoke('review:info', args),

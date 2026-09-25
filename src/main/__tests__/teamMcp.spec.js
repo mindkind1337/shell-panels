@@ -7,7 +7,7 @@ import { createRequire } from 'module'
 import { ensureTeamChannel, pollTeamChannel } from '../teamChannel'
 import { takeTeamAcks } from '../teamAcks'
 import { writeCurrentTeams, retireOldTeams, addNotices } from '../teamNotices'
-import { publishTeamTasks, takeTeamRequests } from '../teamTasks'
+import { publishTeamTasks, takeTeamRequests, finishTeamRequests, messageStatuses } from '../teamTasks'
 
 const require = createRequire(import.meta.url)
 const SERVER = join(__dirname, '..', 'teamMcp', 'server.cjs')
@@ -393,17 +393,20 @@ describe('the team board through the team tools', () => {
   })
   const call = (name, args = {}) => mcp.handle({ id: 1, method: 'tools/call', params: { name, arguments: args } })
 
-  it('asks Tessel to add and move cards; Tessel takes each request once', () => {
+  it('asks Tessel to add and move cards; a request stays until the board is saved', () => {
     expect(call('team_task_add', { title: 'Review  terminal scroll', assignee: '#1', column: 'doing' }).isError).toBe(false)
     expect(call('team_task_add', { title: 'Team view' }).isError).toBe(false) // for me
     expect(call('team_task_move', { id: 'task-1-2', column: 'review' }).isError).toBe(false)
     const res = takeTeamRequests({ dir, teamId })
     expect(res.refused).toEqual([])
-    expect(res.requests).toEqual([
+    expect(res.requests.map(({ file, ...r }) => r)).toEqual([
       { fromId: B.id, action: 'add', title: 'Review terminal scroll', assignee: '#1', column: 'doing' },
       { fromId: B.id, action: 'add', title: 'Team view', assignee: '#4', column: 'todo' },
       { fromId: B.id, action: 'move', id: 'task-1-2', column: 'review' }
     ])
+    // Not saved yet (say Tessel stopped): the same requests come back.
+    expect(takeTeamRequests({ dir, teamId }).requests).toEqual(res.requests)
+    finishTeamRequests({ dir, teamId, files: res.requests.map((r) => r.file) })
     expect(takeTeamRequests({ dir, teamId }).requests).toEqual([])
   })
 
@@ -421,6 +424,14 @@ describe('the team board through the team tools', () => {
     const res = takeTeamRequests({ dir, teamId })
     expect(res.requests).toEqual([])
     expect(res.refused[0].fromId).toBe(A.id)
+  })
+
+  it('tells the status of messages, read ones no longer kept included', () => {
+    const sent = mcp.send(mcp.locate(), '#1', 'hello')
+    expect(sent.ok).toBe(true)
+    pollTeamChannel({ dir, teamId })
+    const id = pollTeamChannel({ dir, teamId }).history.find((m) => m.text === 'hello').id
+    expect(messageStatuses({ dir, teamId, ids: [id, 'old-1'] }).statuses).toEqual({ [id]: 'pending', 'old-1': 'gone' })
   })
 
   it('lists the cards Tessel published', () => {

@@ -3541,7 +3541,10 @@ async function restartForTeamTools() {
       }
       const t = trackedState[leaf.id]
       const quiet = t && t.state === 'idle' && now - t.since > 60000
-      const inUse = (leaf.id === activeId.value && document.hasFocus()) || userIsTyping(leaf.id)
+      // Nor over a line that may hold an unsent draft: not known to be empty
+      // (after a reload, or history recalled) and not proven empty on screen.
+      const draftMaybe = !!userDraft[leaf.id] || (!!draftUnknown[leaf.id] && !inputShownEmpty(leaf.id))
+      const inUse = (leaf.id === activeId.value && document.hasFocus()) || userIsTyping(leaf.id) || draftMaybe
       if (!quiet || inUse || approvals[leaf.id] || pendingMessages[leaf.id] || unsent[leaf.id] || delivering.has(leaf.id)) continue
       restarting = true
       restartedForTools.add(leaf.id)
@@ -3626,19 +3629,23 @@ async function syncTeamBoard(team, dir, members) {
   const byNum = (n) => members.find((m) => m.num === Number(String(n).slice(1))) || null
   const res = await window.shellApi.team.requests({ dir, teamId: team.id })
   const refusals = []
+  const applied = [] // request files, removed once the board is saved
   if (res && res.ok) {
     for (const r of res.refused || []) refusals.push({ fromId: r.fromId, text: `Your board request was not done: ${r.error}.` })
     for (const r of res.requests || []) {
       const from = members.find((m) => m.id === r.fromId)
+      applied.push(r.file)
       if (!from) continue // not (or no longer) in this team
       if (r.action === 'add') {
+        // Already applied (Tessel stopped before the file was removed).
+        if (boardTasks.some((t) => t.requestKey === `${team.id}/${r.file}`)) continue
         const who = r.assignee ? byNum(r.assignee) : from
         if (!who) {
           refusals.push({ fromId: from.id, text: `The card "${r.title}" was not added: ${r.assignee} is not in your team.` })
           continue
         }
         const task = addTask({ title: r.title, wsId })
-        updateTask(task.id, { paneId: who.id, column: r.column, createdBy: from.id })
+        updateTask(task.id, { paneId: who.id, column: r.column, createdBy: from.id, requestKey: `${team.id}/${r.file}` })
         recordActivity({ type: 'task', action: 'added', paneId: who.id, agent: agentInfo(who), title: r.title, wsId, by: paneLabel(from) })
       } else if (r.action === 'move') {
         const task = boardTasks.find((t) => t.id === r.id)
@@ -3662,6 +3669,12 @@ async function syncTeamBoard(team, dir, members) {
       }
     }
   }
+  // The board is saved before the requests are removed: a reload in between
+  // applies them again, and a card already made is recognised (requestKey).
+  if (applied.length) {
+    const saved = await window.shellApi.taskBoard.save(JSON.parse(JSON.stringify(boardTasks))).catch(() => null)
+    if (saved && saved.ok) await window.shellApi.team.requestsDone({ dir, teamId: team.id, files: applied })
+  }
   for (const r of refusals) {
     const leaf = findLeaf(r.fromId)
     if (leaf) tellAgents([leaf], `[Tessel] ${r.text}`, team.id)
@@ -3679,6 +3692,30 @@ async function syncTeamBoard(team, dir, members) {
   if (pub && pub.ok) boardSigs[team.id] = sig
 }
 const boardSigs = {} // teamId -> the cards last published
+
+// A message logged unread that is no longer in the recent history (200
+// entries) is looked up in the channel itself, every 10 s at most.
+const unreadCheckAt = {} // teamId -> time of the next look-up
+async function refreshOldUnread(team, dir, history) {
+  if (!teamMsgEvents || !window.shellApi.team || !window.shellApi.team.messageStatus) return
+  if (Date.now() < (unreadCheckAt[team.id] || 0)) return
+  unreadCheckAt[team.id] = Date.now() + 10000
+  const recent = new Set((Array.isArray(history) ? history : []).map((m) => m && m.id))
+  const ids = []
+  for (const [id, e] of teamMsgEvents) if (e.status === 'unread' && e.teamId === team.id && !recent.has(id)) ids.push(id)
+  if (!ids.length) return
+  const res = await window.shellApi.team.messageStatus({ dir, teamId: team.id, ids })
+  if (!res || !res.ok) return
+  let changed = false
+  for (const id of ids) {
+    // 'gone': the channel keeps only so many read messages.
+    if (res.statuses[id] === 'delivered' || res.statuses[id] === 'gone') {
+      teamMsgEvents.get(id).status = 'read'
+      changed = true
+    }
+  }
+  if (changed) activityChanged()
+}
 
 async function deliverChannel(team, members) {
   const dir = channelDir(team)
@@ -3705,6 +3742,7 @@ async function deliverChannel(team, members) {
       }
       for (const m of members) wakeIfNeeded(m)
       logTeamMessages(team, res)
+      await refreshOldUnread(team, dir, res.history)
     }
     await syncTeamBoard(team, dir, members)
     installTeamToolsOnce() // runs on its own (Claude and Codex take a while)

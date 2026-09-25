@@ -200,7 +200,8 @@ export function summarize(events, opts = {}) {
       if (!inPeriod || !counts(team, ws)) continue
       const r = row(id, e.agent)
       visible.add(id)
-      if (e.status === 'sent' || e.status === 'delivered') r.received++
+      // Between agents: 'unread' / 'read' (it reached their inbox either way).
+      if (e.status === 'sent' || e.status === 'delivered' || e.status === 'unread' || e.status === 'read') r.received++
       if (e.status === 'held') r.held++
       if (e.status === 'skipped') r.skipped++
       r.lastActivity = Math.max(r.lastActivity || 0, e.t)

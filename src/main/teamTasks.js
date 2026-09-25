@@ -3,8 +3,9 @@
 //   <project>/.tessel/team-channel/<team>/tasks.json   the team's cards, written
 //     by Tessel (the only writer of the board) for the agents to read
 //   <project>/.tessel/team-channel/<team>/requests/<paneId>__<random>.json
-//     an agent asks Tessel to add or move a card; Tessel takes each request
-//     in, applies it on the board and deletes the file
+//     an agent asks Tessel to add or move a card; Tessel applies it on the
+//     board, and deletes the file only once the board is saved (a request
+//     applied again after a crash is recognised by its file name: no double)
 import fs from 'fs'
 import { join, resolve, isAbsolute } from 'path'
 
@@ -50,9 +51,10 @@ export function publishTeamTasks({ dir, teamId, tasks } = {}) {
   return { ok: true, changed: true }
 }
 
-// Validated requests, oldest first; their files are removed.
-// -> { ok, requests: [{ fromId, action: 'add', title, assignee, column }
-//                      | { fromId, action: 'move', id, column }] ,
+// Validated requests, oldest first (their files stay until
+// finishTeamRequests); refused ones are removed at once.
+// -> { ok, requests: [{ file, fromId, action: 'add', title, assignee, column }
+//                      | { file, fromId, action: 'move', id, column }] ,
 //      refused: [{ fromId, error }] }
 export function takeTeamRequests({ dir, teamId } = {}) {
   const root = teamRoot(dir, teamId)
@@ -82,16 +84,52 @@ export function takeTeamRequests({ dir, teamId } = {}) {
     } catch {
       continue // being written: next round
     }
+    const req = parseRequest(data)
+    if (!req.error) {
+      requests.push({ file: f.name, fromId: f.fromId, ...req })
+      continue
+    }
     try {
       fs.rmSync(file, { force: true })
     } catch {
-      continue // taken next round
+      continue // told next round
     }
-    const req = parseRequest(data)
-    if (req.error) refused.push({ fromId: f.fromId, error: req.error })
-    else requests.push({ fromId: f.fromId, ...req })
+    refused.push({ fromId: f.fromId, error: req.error })
   }
   return { ok: true, requests, refused }
+}
+
+// The requests applied and saved on the board: their files go.
+export function finishTeamRequests({ dir, teamId, files } = {}) {
+  const root = teamRoot(dir, teamId)
+  if (!root || !Array.isArray(files)) return { ok: false, error: 'Invalid team location.' }
+  for (const name of files) {
+    if (typeof name !== 'string' || !/^[A-Za-z0-9._-]{1,100}__[A-Za-z0-9-]{1,80}\.json$/.test(name)) continue
+    try {
+      fs.rmSync(join(root, 'requests', name), { force: true })
+    } catch {
+      // removed next round (applying it again changes nothing)
+    }
+  }
+  return { ok: true }
+}
+
+// The status of team messages by id, read from the channel's state:
+// { <id>: 'pending' | 'inflight' | 'uncertain' | 'delivered' | 'gone' }.
+// 'gone': no longer kept, which only happens to delivered (read) messages.
+export function messageStatuses({ dir, teamId, ids } = {}) {
+  const root = teamRoot(dir, teamId)
+  if (!root || !Array.isArray(ids)) return { ok: false, error: 'Invalid team location.' }
+  let state = null
+  try {
+    state = JSON.parse(fs.readFileSync(join(root, 'state.json'), 'utf8'))
+  } catch {
+    return { ok: false, error: 'The team channel could not be read.' }
+  }
+  const byId = new Map((Array.isArray(state.messages) ? state.messages : []).map((m) => [m.id, m.status]))
+  const statuses = {}
+  for (const id of ids.slice(0, 500)) if (typeof id === 'string') statuses[id] = byId.get(id) || 'gone'
+  return { ok: true, statuses }
 }
 
 export function parseRequest(data) {
