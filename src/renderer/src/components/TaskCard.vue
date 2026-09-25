@@ -20,7 +20,7 @@ const props = defineProps({
 
 const emit = defineEmits(['focus-pane', 'review'])
 
-// Drag a card to another column (the arrows stay, for the keyboard).
+// Drag a card to another column (the only way to move it).
 const TASK_DRAG_TYPE = 'application/x-tessel-task' // same type in TaskBoard.vue
 const dragging = ref(false)
 function onDragStart(e) {
