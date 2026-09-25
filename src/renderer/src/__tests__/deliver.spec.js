@@ -101,10 +101,10 @@ describe('pasteAndConfirm', () => {
     expect(r).toBe('unconfirmed')
   })
 
-  it('the pane closes: failed', async () => {
+  it('the pane closes after the paste: unconfirmed, never failed (no second paste)', async () => {
     const { deps } = harness((s) => {
       s.gone = s.t > 1000
     })
-    expect(await pasteAndConfirm('p', MSG, deps)).toBe('failed')
+    expect(await pasteAndConfirm('p', MSG, deps)).toBe('unconfirmed')
   })
 })

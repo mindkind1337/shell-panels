@@ -12,7 +12,7 @@
 // d: { getPane(id) -> { paste, submit, screenText } | null, isBusy(id),
 //      awaitingApproval(id), sleep(ms) -> Promise }
 // -> 'confirmed' | 'unconfirmed' | 'requeue' (approval prompt before the
-//    paste) | 'failed' (pane gone, write error, approval before Enter)
+//    paste) | 'failed' (no pane: nothing was typed)
 
 export const DELIVER = {
   settleMs: 500, // between paste and Enter
@@ -58,25 +58,27 @@ export async function pasteAndConfirm(id, text, deps) {
   let pane = d.getPane(id)
   if (!pane) return 'failed'
   if (d.awaitingApproval(id)) return 'requeue'
+  // From here on some text may be in the agent's terminal (which outlives a
+  // reload): anything that goes wrong is 'unconfirmed', never 'failed', so
+  // the message is not pasted there a second time.
   try {
     pane.paste(text)
   } catch {
-    return 'failed'
+    return 'unconfirmed'
   }
   await d.sleep(d.cfg.settleMs)
   for (let tries = 0; ; tries++) {
     pane = d.getPane(id)
-    if (!pane) return 'failed'
+    if (!pane) return 'unconfirmed'
     // Never press Enter into an approval prompt.
-    if (d.awaitingApproval(id)) return tries === 0 ? 'failed' : 'unconfirmed'
+    if (d.awaitingApproval(id)) return 'unconfirmed'
     try {
       pane.submit()
     } catch {
-      return 'failed'
+      return 'unconfirmed'
     }
     const seen = await watchAfterEnter(id, text, d)
     if (seen === 'accepted') return 'confirmed'
-    if (seen === 'gone') return 'failed'
     if (seen === 'draft' && tries < d.cfg.retries) continue
     return 'unconfirmed'
   }
