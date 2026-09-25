@@ -59,8 +59,9 @@ function readJson(file) {
 // else can change that. Only without it, "me" ("#4") is used, and only when
 // it matches exactly one agent.
 // Each Tessel window writes its own current.<window>.json ({ at, panes });
-// those written in the last 5 minutes are read. current.json (their merged
-// copy, or the only file of an older Tessel) when there are none.
+// those written in the last 5 minutes are read (the others' windows are
+// gone: no team). current.json only when there is no window file at all
+// (an older Tessel wrote just that).
 const WINDOW_GONE_MS = 5 * 60 * 1000
 function currentPanes(base) {
   let names = []
@@ -69,14 +70,16 @@ function currentPanes(base) {
   } catch {
     return null
   }
-  let panes = null
-  for (const n of names) {
-    if (!/^current\.[A-Za-z0-9_-]{1,40}\.json$/.test(n)) continue
-    const data = readJson(path.join(base, n))
-    if (!data || !data.panes || typeof data.at !== 'number' || Date.now() - data.at > WINDOW_GONE_MS) continue
-    panes = Object.assign(panes || {}, data.panes)
+  const windows = names.filter((n) => /^current\.[A-Za-z0-9_-]{1,40}\.json$/.test(n))
+  if (windows.length) {
+    const panes = {}
+    for (const n of windows) {
+      const data = readJson(path.join(base, n))
+      if (!data || !data.panes || typeof data.at !== 'number' || Date.now() - data.at > WINDOW_GONE_MS) continue
+      Object.assign(panes, data.panes)
+    }
+    return panes
   }
-  if (panes) return panes
   const current = readJson(path.join(base, 'current.json'))
   return current && current.panes ? current.panes : null
 }

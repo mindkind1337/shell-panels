@@ -290,6 +290,22 @@ describe('two Tessel windows in one project', () => {
     expect(found('pane-9-zzzzzz').teamId).toBe('team-9')
   })
 
+  it('when every window is gone, the merged copy does not bring its agents back', () => {
+    ensureTeamChannel({ dir, teamId: 'team-9', members: [{ id: 'pane-9-zzzzzz', num: 2, title: 'B' }] })
+    writeCurrentTeams({ dir, owner: 'app', panes: { 'pane-9-zzzzzz': { team: 'team-9', num: 2 } } })
+    expect(found('pane-9-zzzzzz').teamId).toBe('team-9')
+    age('app', 6 * 60 * 1000)
+    expect(found('pane-9-zzzzzz').error).toMatch(/not in a Tessel team/)
+    fs.writeFileSync(ownFile('app'), '{damaged')
+    expect(found('pane-9-zzzzzz').error).toMatch(/not in a Tessel team/)
+  })
+
+  it('an older Tessel (current.json only) still works', () => {
+    ensureTeamChannel({ dir, teamId: 'team-9', members: [{ id: 'pane-9-zzzzzz', num: 2, title: 'B' }] })
+    writeCurrentTeams({ dir, panes: { 'pane-9-zzzzzz': { team: 'team-9', num: 2 } } })
+    expect(found('pane-9-zzzzzz').teamId).toBe('team-9')
+  })
+
   it('retires only its own teams while the other window runs', () => {
     ensureTeamChannel({ dir, teamId: 'team-9', members: [{ id: 'pane-9-zzzzzz', num: 2, title: 'B' }] })
     ensureTeamChannel({ dir, teamId: 'team-1', members: [{ id: 'pane-1-aaaaaa', num: 1, title: 'A' }] })
