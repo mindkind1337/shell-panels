@@ -3307,6 +3307,8 @@ async function restartForTeamTools() {
       const title = paneLabel(leaf)
       try {
         const ok = await restartInPlace(leaf.id)
+        if (window.shellApi.log)
+          window.shellApi.log(ok ? 'info' : 'error', `team tools: ${ok ? 'restarted' : 'could not restart'} ${title} (${leaf.id}) in place`)
         if (ok) showToast(`Restarted ${title} so it can use team messages. Its conversation continues.`, { timeout: 6000 })
       } finally {
         restarting = false
@@ -3340,7 +3342,7 @@ async function deliverChannel(team, members) {
         else delete teamUnread[m.id]
       }
     }
-    await installTeamToolsOnce()
+    installTeamToolsOnce() // runs on its own (Claude and Codex take a while)
     restartForTeamTools()
     return
   }
