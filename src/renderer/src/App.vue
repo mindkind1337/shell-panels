@@ -469,6 +469,7 @@ async function createLeaf(shellId, agent = null, cwd = null, worktree = null, op
     sessionId: null,
     launchedAt: Date.now(),
     teamTools: !attached && teamToolsReady,
+    toolsVersion: !attached && teamToolsReady ? teamToolsVersion : null,
     exitedAtStart: attached && !!res.exited,
     restoredText,
     broadcast: true
@@ -575,7 +576,8 @@ function serializeNode(node) {
       startDir: node.startDir || null,
       num: node.num || null,
       team: node.team || null,
-      teamTools: !!node.teamTools
+      teamTools: !!node.teamTools,
+      toolsVersion: node.toolsVersion || null
     }
   }
   return {
@@ -611,6 +613,7 @@ async function deserializeNode(snap, cwd = null) {
     if (!leaf) return null
     if (Number.isInteger(snap.num) && snap.num > 0) leaf.num = snap.num
     if (snap.teamTools) leaf.teamTools = true
+    if (typeof snap.toolsVersion === 'string') leaf.toolsVersion = snap.toolsVersion
     // Still running: its line is what was saved. Unknown (an older layout):
     // no automatic reminder until the user sends or clears a line there.
     // Still running: its line is what this window recorded; nothing
@@ -3354,6 +3357,12 @@ async function ackChannel(dir, teamId, d, key, tries = 0) {
 }
 
 let teamToolsReady = false
+// The team tools' version now (server.cjs VERSION), once they are set up.
+let teamToolsVersion = null
+// Started with the team tools as they are now (an older version: restarted).
+function hasCurrentTools(leaf) {
+  return !!leaf.teamTools && (!teamToolsVersion || leaf.toolsVersion === teamToolsVersion)
+}
 // The team tools are set up for Claude Code and Codex once a team exists
 // (MCP server "tessel-team" + Claude Code hooks; listed in the MCP dialog).
 let teamToolsNextTry = 0
@@ -3372,6 +3381,7 @@ async function installTeamToolsOnce() {
   }
   if (res && res.ok) {
     teamToolsReady = true
+    teamToolsVersion = res.version || null
     if (res.changed && res.changed.length)
       showToast('Team messages now go in the background, never into your terminals (MCP servers: tessel-team).', { timeout: 10000 })
     return
@@ -3429,7 +3439,10 @@ async function restartInPlace(leafId, opts = {}) {
     gen: (old.gen || 0) + 1,
     restartedAt: Date.now()
   })
-  if (opts.forTools) fresh.teamTools = true
+  if (opts.forTools) {
+    fresh.teamTools = true
+    fresh.toolsVersion = teamToolsVersion
+  }
   ws.tree = replaceNode(ws.tree, leafId, () => fresh)
   return true
 }
@@ -3513,7 +3526,7 @@ async function restartForTeamTools() {
   const now = Date.now()
   for (const team of teams.value) {
     for (const leaf of teamMembers(team.id)) {
-      if (leaf.kind !== 'agent' || leaf.teamTools || restartedForTools.has(leaf.id)) continue
+      if (leaf.kind !== 'agent' || hasCurrentTools(leaf) || restartedForTools.has(leaf.id)) continue
       // Only an agent that gets the tools (Claude Code, Codex) and whose
       // conversation Tessel can resume for sure: a quiet terminal is no proof
       // there is nothing to keep. Otherwise it is left running, and it says so.
@@ -3537,7 +3550,7 @@ async function restartForTeamTools() {
         const ok = await restartInPlace(leaf.id, { forTools: true })
         if (window.shellApi.log)
           window.shellApi.log(ok ? 'info' : 'error', `team tools: ${ok ? 'restarted' : 'could not restart'} ${title} (${leaf.id}) in place`)
-        if (ok) showToast(`Restarted ${title} so it can use team messages. Its conversation continues.`, { timeout: 6000 })
+        if (ok) showToast(`Restarted ${title} so it has the latest team tools. Its conversation continues.`, { timeout: 6000 })
       } finally {
         restarting = false
       }

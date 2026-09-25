@@ -814,7 +814,10 @@ ipcMain.handle(
     }
     if (changed.length) log.info('team', `team tools set up: ${changed.join('; ')}`)
     if (errors.length) log.error('team', `team tools: ${errors.join('; ')}`)
-    return { ok: errors.length === 0, script, changed, errors }
+    // The tools' version: an agent started with an older one is restarted
+    // (in place, when quiet) to load the new tools.
+    const version = (/const VERSION = '([^']+)'/.exec(teamServerSource) || [])[1] || null
+    return { ok: errors.length === 0, script, changed, errors, version }
   })
 )
 ipcMain.handle(
