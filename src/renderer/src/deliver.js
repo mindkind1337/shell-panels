@@ -10,7 +10,7 @@
 // unconfirmed: no acknowledgement, and no blind second paste.
 //
 // d: { getPane(id) -> { paste, submit, screenText } | null, isBusy(id),
-//      awaitingApproval(id), sleep(ms) -> Promise }
+//      awaitingApproval(id), sleep(ms) -> Promise, waitIdle: bool }
 // -> 'confirmed' | 'unconfirmed' | 'requeue' (approval prompt before the
 //    paste) | 'failed' (no pane: nothing was typed)
 
@@ -58,6 +58,9 @@ export async function pasteAndConfirm(id, text, deps) {
   let pane = d.getPane(id)
   if (!pane) return 'failed'
   if (d.awaitingApproval(id)) return 'requeue'
+  // A message that waits for a quiet agent: checked again right before it is
+  // typed (the agent may have started working meanwhile).
+  if (d.waitIdle && d.isBusy(id)) return 'requeue'
   // From here on some text may be in the agent's terminal (which outlives a
   // reload): anything that goes wrong is 'unconfirmed', never 'failed', so
   // the message is not pasted there a second time.

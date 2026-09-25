@@ -2275,10 +2275,6 @@ function flushPending() {
     if (!pane || !findLeaf(id)) {
       for (const item of pendingMessages[id]) failDelivery(item)
       delete pendingMessages[id]
-      if (unsent[id]) {
-        failDelivery(unsent[id].item)
-        delete unsent[id]
-      }
       continue
     }
     if (awaitingApproval(id)) {
@@ -2310,7 +2306,8 @@ function flushPending() {
       getPane: (pid) => (findLeaf(pid) ? getPane(pid) : null),
       isBusy: (pid) => agentStatus[pid] === 'busy',
       awaitingApproval,
-      sleep: (ms) => new Promise((r) => setTimeout(r, ms))
+      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+      waitIdle: !!(item.meta && item.meta.waitIdle)
     }
     // A channel message is marked in flight on disk first; if that is
     // refused, it is not typed now ('refused').

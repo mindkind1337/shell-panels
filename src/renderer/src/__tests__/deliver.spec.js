@@ -84,6 +84,13 @@ describe('pasteAndConfirm', () => {
     expect(state.submits).toBe(1)
   })
 
+  it('waiting for a quiet agent that got busy meanwhile: put back, nothing typed', async () => {
+    const { state, deps } = harness(() => {})
+    state.busy = true
+    expect(await pasteAndConfirm('p', MSG, { ...deps, waitIdle: true })).toBe('requeue')
+    expect(state.pastes).toBe(0)
+  })
+
   it('an approval prompt before the paste: put back, nothing typed', async () => {
     const { state, deps } = harness(() => {})
     state.approval = true
