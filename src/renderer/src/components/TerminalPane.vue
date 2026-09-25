@@ -285,10 +285,12 @@ function closeFind() {
 }
 
 function findNext() {
+  keepBottomUntil = 0
   if (search && findQuery.value) search.findNext(findQuery.value, { decorations: FIND_DECORATIONS })
 }
 
 function findPrev() {
+  keepBottomUntil = 0
   if (search && findQuery.value)
     search.findPrevious(findQuery.value, { decorations: FIND_DECORATIONS })
 }
@@ -301,6 +303,7 @@ function onFindInput() {
     return
   }
   // Incremental: re-search from the current match as you type.
+  keepBottomUntil = 0
   if (search) search.findNext(findQuery.value, { incremental: true, decorations: FIND_DECORATIONS })
 }
 
@@ -709,8 +712,11 @@ onMounted(() => {
     findResult.count = resultCount
   })
   term.open(hostEl.value)
-  // Scrolling by hand ends "stay at the bottom" at once.
-  hostEl.value.addEventListener('wheel', () => (keepBottomUntil = 0), { passive: true, capture: true })
+  // Anything done by hand in the terminal (wheel, keys like Shift+PageUp,
+  // dragging the scrollbar, a click) ends "stay at the bottom" at once.
+  const byHand = () => (keepBottomUntil = 0)
+  for (const ev of ['wheel', 'keydown', 'pointerdown'])
+    hostEl.value.addEventListener(ev, byHand, { passive: true, capture: true })
   // Draw with the graphics card (much faster with busy agents and many
   // panes), like VS Code. Falls back to the normal renderer if WebGL is
   // unavailable or the graphics context is lost.
@@ -1030,7 +1036,13 @@ onBeforeUnmount(() => {
           message not confirmed
         </button>
         <span
-          v-if="isAgent && track && (track.level === 'warn' || track.level === 'alert') && !asksApproval && !limit"
+          v-if="
+            isAgent &&
+            track &&
+            (track.level === 'warn' || track.level === 'alert') &&
+            !asksApproval &&
+            !limit
+          "
           class="pane-stuck"
           :class="track.level"
           :title="track.reason"
@@ -1314,7 +1326,9 @@ onBeforeUnmount(() => {
       aria-label="Confirm paste"
       @mousedown.stop
       @contextmenu.stop.prevent
-      @keydown.enter.stop="(e) => !e.target.closest('button') && (e.preventDefault(), confirmPaste())"
+      @keydown.enter.stop="
+        (e) => !e.target.closest('button') && (e.preventDefault(), confirmPaste())
+      "
       @keydown.escape.prevent.stop="cancelPaste"
     >
       <div class="paste-ask-title">
@@ -1402,11 +1416,11 @@ onBeforeUnmount(() => {
         <button
           v-if="isAgent && ctx.setTeamLead"
           class="ctx-menu-item"
-          @click="closeCtxMenu(), ctx.setTeamLead(team.id, isLead ? null : node.id)"
+          @click="(closeCtxMenu(), ctx.setTeamLead(team.id, isLead ? null : node.id))"
         >
           {{ isLead ? `Stop leading ${team.name}` : `Make lead of ${team.name}` }}
         </button>
-        <button class="ctx-menu-item" @click="closeCtxMenu(), ctx.leaveTeam(node.id)">
+        <button class="ctx-menu-item" @click="(closeCtxMenu(), ctx.leaveTeam(node.id))">
           Leave {{ team.name }}
         </button>
         <div class="ctx-menu-sep"></div>
