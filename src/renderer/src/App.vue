@@ -3636,16 +3636,18 @@ async function syncTeamBoard(team, dir, members) {
       const from = members.find((m) => m.id === r.fromId)
       applied.push(r.file)
       if (!from) continue // not (or no longer) in this team
+      // Already applied (Tessel stopped before its file was removed): never
+      // again, so a later change is not undone.
+      const key = `${team.id}/${r.file}`
+      if (boardTasks.some((t) => t.requestKey === key || (t.requestsApplied || []).includes(key))) continue
       if (r.action === 'add') {
-        // Already applied (Tessel stopped before the file was removed).
-        if (boardTasks.some((t) => t.requestKey === `${team.id}/${r.file}`)) continue
         const who = r.assignee ? byNum(r.assignee) : from
         if (!who) {
           refusals.push({ fromId: from.id, text: `The card "${r.title}" was not added: ${r.assignee} is not in your team.` })
           continue
         }
         const task = addTask({ title: r.title, wsId })
-        updateTask(task.id, { paneId: who.id, column: r.column, createdBy: from.id, requestKey: `${team.id}/${r.file}` })
+        updateTask(task.id, { paneId: who.id, column: r.column, createdBy: from.id, requestKey: key })
         recordActivity({ type: 'task', action: 'added', paneId: who.id, agent: agentInfo(who), title: r.title, wsId, by: paneLabel(from) })
       } else if (r.action === 'move') {
         const task = boardTasks.find((t) => t.id === r.id)
@@ -3653,8 +3655,14 @@ async function syncTeamBoard(team, dir, members) {
           refusals.push({ fromId: from.id, text: `No card ${r.id} on your team's board (see team_tasks).` })
           continue
         }
-        if (task.column === r.column) continue
-        updateTask(task.id, { column: r.column })
+        // Recorded on the card, saved with it (the last few are enough: a
+        // request file is removed right after the save).
+        const done = [...(task.requestsApplied || []), key].slice(-20)
+        if (task.column === r.column) {
+          updateTask(task.id, { requestsApplied: done })
+          continue
+        }
+        updateTask(task.id, { column: r.column, requestsApplied: done })
         const owner = task.paneId ? findLeaf(task.paneId) : null
         recordActivity({
           type: 'task',
@@ -3704,14 +3712,18 @@ async function refreshOldUnread(team, dir, history) {
   const ids = []
   for (const [id, e] of teamMsgEvents) if (e.status === 'unread' && e.teamId === team.id && !recent.has(id)) ids.push(id)
   if (!ids.length) return
-  const res = await window.shellApi.team.messageStatus({ dir, teamId: team.id, ids })
-  if (!res || !res.ok) return
   let changed = false
-  for (const id of ids) {
-    // 'gone': the channel keeps only so many read messages.
-    if (res.statuses[id] === 'delivered' || res.statuses[id] === 'gone') {
-      teamMsgEvents.get(id).status = 'read'
-      changed = true
+  // All of them, 500 per look-up.
+  for (let i = 0; i < ids.length; i += 500) {
+    const part = ids.slice(i, i + 500)
+    const res = await window.shellApi.team.messageStatus({ dir, teamId: team.id, ids: part })
+    if (!res || !res.ok) break
+    for (const id of part) {
+      // 'gone': the channel keeps only so many read messages.
+      if (res.statuses[id] === 'delivered' || res.statuses[id] === 'gone') {
+        teamMsgEvents.get(id).status = 'read'
+        changed = true
+      }
     }
   }
   if (changed) activityChanged()
