@@ -44,6 +44,13 @@ const api = {
   openExternal: (url) => ipcRenderer.invoke('app:openExternal', url),
   gitInfo: (cwd) => ipcRenderer.invoke('git:info', cwd),
   createWorktree: (cwd, label) => ipcRenderer.invoke('git:createWorktree', { cwd, label }),
+  // Review and merge a task branch: { root, path, branch, target, ... }.
+  review: {
+    info: (args) => ipcRenderer.invoke('review:info', args),
+    diff: (args) => ipcRenderer.invoke('review:diff', args),
+    merge: (args) => ipcRenderer.invoke('review:merge', args),
+    remove: (args) => ipcRenderer.invoke('review:remove', args)
+  },
   mcpList: (cwd) => ipcRenderer.invoke('mcp:list', cwd),
   mcpAdd: (spec) => ipcRenderer.invoke('mcp:add', spec),
   mcpRemove: (spec) => ipcRenderer.invoke('mcp:remove', spec),

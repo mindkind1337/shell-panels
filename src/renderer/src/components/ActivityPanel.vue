@@ -154,6 +154,27 @@ function when(t) {
   return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`
 }
 
+// One line for a task event: what happened to it and who did it.
+function taskLine(x) {
+  const t = `“${x.task}”`
+  switch (x.action) {
+    case 'review':
+      return { who: x.title, text: `finished the task ${t}`, note: 'ready for your review' }
+    case 'changes':
+      return { who: 'You', text: `asked ${x.title} for changes to ${t}`, note: x.detail }
+    case 'resolve':
+      return { who: 'You', text: `asked ${x.title} to resolve the conflicts of ${t}`, note: x.detail }
+    case 'merged':
+      return { who: 'You', text: `merged ${t}`, note: x.detail }
+    case 'discarded':
+      return { who: 'You', text: `discarded ${t}`, note: x.detail }
+    case 'done':
+      return { who: 'You', text: `marked ${t} as done`, note: '' }
+    default:
+      return { who: x.title, text: `started the task ${t}`, note: x.branch ? `branch ${x.branch}` : '' }
+  }
+}
+
 function describe(x) {
   switch (x.kind) {
     case 'message': {
@@ -168,9 +189,7 @@ function describe(x) {
       return { who, text: `→ ${x.title}${to}: “${x.preview}”`, note: how }
     }
     case 'task':
-      return x.action === 'review'
-        ? { who: x.title, text: `finished the task “${x.task}”`, note: 'ready for your review' }
-        : { who: x.title, text: `started the task “${x.task}”`, note: x.branch ? `branch ${x.branch}` : '' }
+      return taskLine(x)
     case 'approval':
       return { who: x.title, text: 'asked for your approval', note: '' }
     case 'approval-end':

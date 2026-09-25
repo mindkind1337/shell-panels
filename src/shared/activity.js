@@ -237,7 +237,8 @@ export function summarize(events, opts = {}) {
         paneId: id || null,
         title: e.agent ? e.agent.title : 'Agent',
         task: e.title || '',
-        branch: e.branch || ''
+        branch: e.branch || '',
+        detail: e.detail || ''
       })
       continue
     }

@@ -18,7 +18,7 @@ const props = defineProps({
   workspaceId: { type: String, default: null }
 })
 
-const emit = defineEmits(['new-task', 'focus-pane'])
+const emit = defineEmits(['new-task', 'focus-pane', 'review'])
 const newTitle = ref('')
 
 // One pass over tasks → { todo: [...], doing: [...], ... }. Reads only each
@@ -88,6 +88,7 @@ function columnLabel(column) {
             :task="task"
             :agent-panes="agentPanes"
             @focus-pane="(id) => emit('focus-pane', id)"
+            @review="(id) => emit('review', id)"
           />
           <p v-if="!grouped[column].length" class="task-column-empty">No tasks</p>
         </div>

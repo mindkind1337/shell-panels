@@ -18,7 +18,7 @@ const props = defineProps({
   agentPanes: { type: Array, default: () => [] }
 })
 
-const emit = defineEmits(['focus-pane'])
+const emit = defineEmits(['focus-pane', 'review'])
 
 const colIndex = computed(() => COLUMNS.indexOf(props.task.column))
 const canPrev = computed(() => colIndex.value > 0)
@@ -123,6 +123,15 @@ function paneLabel(pane) {
     </div>
 
     <div class="task-card-actions">
+      <button
+        v-if="task.column === 'review'"
+        class="task-btn task-review-btn"
+        title="See the changes, then merge, ask for changes or discard"
+        data-test="review-task"
+        @click="emit('review', task.id)"
+      >
+        Review
+      </button>
       <button
         v-if="assignedPane && (task.column === 'doing' || task.column === 'review')"
         class="task-btn"

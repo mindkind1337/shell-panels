@@ -141,7 +141,7 @@ export function slugify(text) {
 // Process helpers
 // ---------------------------------------------------------------------------
 
-function run(file, args, opts = {}) {
+export function run(file, args, opts = {}) {
   return new Promise((resolve) => {
     execFile(
       file,

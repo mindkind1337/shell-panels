@@ -29,6 +29,7 @@ import ActivityPanel from './components/ActivityPanel.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import NotesPanel from './components/NotesPanel.vue'
 import NewTaskDialog from './components/NewTaskDialog.vue'
+import ReviewPanel from './components/ReviewPanel.vue'
 import { dropBuffer, seedBuffer } from './ptyStore'
 import { tasks as boardTasks, setTasks, updateTask, removeTask, addTask } from './taskBoardStore'
 
@@ -2185,6 +2186,7 @@ function taskPrompt(task, ws) {
   const where = wt
     ? `You work in your own copy of the project: ${wt.path} (git branch ${wt.branch}, made from ${wt.baseBranch || 'the main branch'}). ` +
       'Commit your work on that branch (git add the files you changed, then git commit). Do not merge it and do not push: the user reviews and merges it. ' +
+      'In your last commit message, list the checks you ran (tests, build) and their results. ' +
       'If the project needs its dependencies installed, install them in this copy (for example npm ci); never link them to another folder.'
     : `You work directly in the project folder ${(ws && ws.cwd) || ''}. Other agents may work there too: check .tessel/notes.md before editing shared files.`
   return (
@@ -2292,7 +2294,9 @@ function agentReportedDone(paneId) {
   showToast(`${leaf ? leaf.title : 'An agent'} finished "${task.title}". It is ready for your review.`, {
     kind: 'attention',
     timeout: 10000,
-    action: { label: 'Show', run: () => focusPane(paneId) }
+    action: task.worktree
+      ? { label: 'Review', run: () => openReview(task.id) }
+      : { label: 'Show', run: () => focusPane(paneId) }
   })
   // Optional second opinion from another agent.
   const reviewer = task.reviewerId && findLeaf(task.reviewerId)
@@ -2302,6 +2306,163 @@ function agentReportedDone(paneId) {
       scope: 'task',
       waitIdle: true
     })
+  }
+}
+
+// --- Review and merge ------------------------------------------------------------
+// A task in Review opens ReviewPanel: its branch's files, commits and diff,
+// then Merge, Request changes or Discard.
+const reviewTaskId = ref(null)
+const reviewTask = computed(() => (reviewTaskId.value && boardTasks.find((t) => t.id === reviewTaskId.value)) || null)
+const reviewAgentLabel = computed(() => {
+  const leaf = reviewTask.value && findLeaf(reviewTask.value.paneId)
+  return leaf ? paneLabel(leaf) : ''
+})
+
+function openReview(taskId) {
+  closeMenus()
+  if (boardTasks.some((t) => t.id === taskId)) reviewTaskId.value = taskId
+}
+
+function taskEvent(task, action, detail = '') {
+  const leaf = findLeaf(task.paneId)
+  recordActivity({
+    type: 'task',
+    action,
+    taskId: task.id,
+    title: task.title,
+    paneId: task.paneId || null,
+    agent: leaf ? agentInfo(leaf) : { title: 'the agent' },
+    wsId: task.wsId,
+    branch: task.worktree ? task.worktree.branch : null,
+    detail
+  })
+}
+
+// Back to the agent, with the task: the card returns to Doing until it
+// signals again.
+function sendBackToAgent(task, text, action, detail) {
+  const leaf = findLeaf(task.paneId)
+  if (!leaf) {
+    showToast('The agent of this task was closed. Start a new task instead.', { kind: 'error' })
+    return false
+  }
+  const wt = task.worktree
+  deliverToAgent(
+    leaf.id,
+    `[Tessel review] ${task.title}\n\n${text}\n\n` +
+      (wt ? `Work in ${wt.path} on branch ${wt.branch}, commit the changes there (say which checks you ran in the commit message), and do not merge. ` : '') +
+      'When it is done and checked, end your last message with a line that contains only the words TASK and COMPLETE joined by an underscore.',
+    { source: 'you', scope: 'task' }
+  )
+  updateTask(task.id, { column: 'doing' })
+  taskEvent(task, action, detail)
+  reviewTaskId.value = null
+  showToast(`Sent to ${leaf.title}. "${task.title}" is back in Doing.`, { timeout: 5000 })
+  return true
+}
+
+// Close the task's agent and delete its copy (after a merge, or to discard).
+async function removeTaskCopy(task, force) {
+  const wt = task.worktree
+  if (!wt) return { ok: true }
+  if (task.paneId && findLeaf(task.paneId)) {
+    closeLeaf(task.paneId, { force: true })
+    // Let its terminal release the folder.
+    await new Promise((r) => setTimeout(r, 800))
+  }
+  return window.shellApi.review.remove({ root: wt.root, path: wt.path, branch: wt.branch, target: wt.baseBranch || 'main', force })
+}
+
+const reviewActions = {
+  requestChanges(text) {
+    const task = reviewTask.value
+    if (task) sendBackToAgent(task, `Changes requested by the user:\n${text}`, 'changes', text.length > 80 ? text.slice(0, 80) + '…' : text)
+  },
+  resolveConflicts(info) {
+    const task = reviewTask.value
+    if (!task || !info) return
+    sendBackToAgent(
+      task,
+      `Your branch ${info.branch} conflicts with ${info.target} in: ${info.conflicts.join(', ')}. ` +
+        `Merge ${info.target} into your branch (git merge ${info.target}), resolve the conflicts keeping both intents, run the checks again, and commit.`,
+      'resolve',
+      info.conflicts.join(', ')
+    )
+  },
+  async merge(info, { cleanup } = {}) {
+    const task = reviewTask.value
+    if (!task || !info || !info.ok) return false
+    const leaf = findLeaf(task.paneId)
+    const ok = await askConfirm({
+      title: `Merge "${task.title}" into ${info.target}?`,
+      text:
+        `${info.commits.length} commit${info.commits.length === 1 ? '' : 's'} and ${info.files.length} file${info.files.length === 1 ? '' : 's'} from ${info.branch} go into ${info.target} in ${info.repo}.` +
+        (cleanup ? ` Then ${leaf ? leaf.title + ' closes and ' : ''}its copy and branch are deleted.` : ''),
+      confirmLabel: 'Merge'
+    })
+    if (!ok) return false
+    const res = await window.shellApi.review.merge({
+      root: task.worktree.root,
+      path: task.worktree.path,
+      branch: task.worktree.branch,
+      target: info.target,
+      title: task.title,
+      expectHead: info.head
+    })
+    if (!res || !res.ok) {
+      showToast(`Not merged: ${(res && res.error) || 'unknown error'}`, { kind: 'error', timeout: 9000 })
+      return false
+    }
+    updateTask(task.id, { column: 'done', mergedAt: Date.now(), mergeSha: res.sha })
+    taskEvent(task, 'merged', `${res.commits} commit${res.commits === 1 ? '' : 's'} into ${info.target}`)
+    reviewTaskId.value = null
+    let note = ''
+    if (cleanup) {
+      const rm = await removeTaskCopy(task, false)
+      if (rm && rm.ok) updateTask(task.id, { paneId: null })
+      else note = ` Its copy was kept: ${(rm && rm.error) || 'could not remove it'}.`
+    }
+    showToast(`Merged "${task.title}" into ${info.target}.${note}`, { kind: note ? 'error' : undefined, timeout: note ? 9000 : 5000 })
+    return true
+  },
+  async discard(info) {
+    const task = reviewTask.value
+    if (!task || !task.worktree) return false
+    const leaf = findLeaf(task.paneId)
+    const n = info && info.ok ? info.commits.length : 0
+    const ok = await askConfirm({
+      title: `Discard "${task.title}"?`,
+      text:
+        `${leaf ? leaf.title + ' closes, and ' : ''}its copy (${task.worktree.path}) and branch ${task.worktree.branch} are deleted` +
+        (n ? `, with its ${n} unmerged commit${n === 1 ? '' : 's'}` : '') +
+        '. This cannot be undone.',
+      confirmLabel: 'Discard',
+      danger: true
+    })
+    if (!ok) return false
+    const rm = await removeTaskCopy(task, true)
+    if (!rm || !rm.ok) {
+      showToast(`Could not delete the copy: ${(rm && rm.error) || 'unknown error'}`, { kind: 'error', timeout: 9000 })
+      return false
+    }
+    taskEvent(task, 'discarded', task.worktree.branch)
+    reviewTaskId.value = null
+    removeTask(task.id)
+    showToast(`Discarded "${task.title}".`, { timeout: 5000 })
+    return true
+  },
+  markDone() {
+    const task = reviewTask.value
+    if (!task) return
+    updateTask(task.id, { column: 'done' })
+    taskEvent(task, 'done')
+    reviewTaskId.value = null
+  },
+  focusAgent() {
+    const task = reviewTask.value
+    reviewTaskId.value = null
+    if (task && task.paneId) focusPane(task.paneId)
   }
 }
 
@@ -3398,6 +3559,7 @@ onBeforeUnmount(() => {
           :workspace-id="currentWsId"
           @new-task="openNewTask"
           @focus-pane="focusPane"
+          @review="openReview"
         />
       </aside>
     </div>
@@ -3522,6 +3684,15 @@ onBeforeUnmount(() => {
       :isolation="worktreeState"
       @start="startTask"
       @close="newTaskOpen = false"
+    />
+
+    <ReviewPanel
+      v-if="reviewTask"
+      :key="reviewTask.id"
+      :task="reviewTask"
+      :agent-label="reviewAgentLabel"
+      :actions="reviewActions"
+      @close="reviewTaskId = null"
     />
 
     <NotesPanel

@@ -4804,3 +4804,346 @@ button.act-stat:hover,
   opacity: 0.5;
   cursor: default;
 }
+
+/* Review and merge a task (ReviewPanel). */
+.rv-card {
+  width: min(1180px, 100%);
+  height: min(820px, calc(100vh - 60px));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+}
+
+.rv-plus {
+  color: var(--ok, #4caf7a);
+}
+
+.rv-minus {
+  color: var(--danger);
+}
+
+.rv-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12.5px;
+}
+
+.rv-check {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--text);
+}
+
+.rv-check-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--surface-3);
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.rv-check.ok .rv-check-mark {
+  background: color-mix(in srgb, var(--ok, #4caf7a) 25%, transparent);
+  color: var(--ok, #4caf7a);
+}
+
+.rv-check.warn .rv-check-mark {
+  background: color-mix(in srgb, var(--warn) 25%, transparent);
+  color: var(--warn);
+}
+
+.rv-check.bad .rv-check-mark {
+  background: color-mix(in srgb, var(--danger) 25%, transparent);
+  color: var(--danger);
+}
+
+.rv-body {
+  display: grid;
+  grid-template-columns: minmax(240px, 300px) 1fr;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.rv-side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.rv-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.rv-brief {
+  margin: 0;
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.rv-plain {
+  flex: 1 1 auto;
+}
+
+.rv-files,
+.rv-commits {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rv-file {
+  display: flex;
+  align-items: center;
+  border-radius: 6px;
+}
+
+.rv-file:hover,
+.rv-file.on {
+  background: var(--surface-2);
+}
+
+.rv-file.on {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.rv-file-btn {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 5px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rv-file.viewed .rv-path {
+  color: var(--text-dim);
+}
+
+.rv-status {
+  flex: 0 0 auto;
+  width: 14px;
+  color: var(--text-dim);
+  font-family: var(--mono, 'Cascadia Mono', Consolas, monospace);
+  font-size: 11.5px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.rv-status.s-A {
+  color: var(--ok, #4caf7a);
+}
+
+.rv-status.s-D {
+  color: var(--danger);
+}
+
+.rv-status.s-M {
+  color: var(--warn);
+}
+
+.rv-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+.rv-counts {
+  flex: 0 0 auto;
+  font-family: var(--mono, 'Cascadia Mono', Consolas, monospace);
+  font-size: 11px;
+}
+
+.rv-viewed {
+  display: grid;
+  place-items: center;
+  padding: 0 6px;
+  cursor: pointer;
+}
+
+.rv-viewed input {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.rv-commit {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px 6px;
+  font-size: 12.5px;
+}
+
+.rv-commit + .rv-commit {
+  border-top: 1px solid var(--border);
+}
+
+.rv-commit-subject {
+  color: var(--text-strong);
+}
+
+.rv-commit-body {
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.rv-diff {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  user-select: text;
+}
+
+.rv-diff > .act-none {
+  padding: 12px 14px;
+}
+
+.rv-diff-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  gap: 10px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-strong);
+  font-size: 12.5px;
+}
+
+.rv-diff-head .rv-path {
+  direction: ltr;
+}
+
+.rv-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--mono, 'Cascadia Mono', Consolas, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.rv-hunk td {
+  padding: 4px 12px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-2));
+  color: var(--text-dim);
+}
+
+.rv-num {
+  width: 1%;
+  padding: 0 8px;
+  color: var(--text-dim);
+  text-align: right;
+  white-space: nowrap;
+  user-select: none;
+  opacity: 0.7;
+}
+
+.rv-code {
+  padding: 0 12px 0 4px;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.rv-sign {
+  display: inline-block;
+  width: 14px;
+  color: var(--text-dim);
+  user-select: none;
+}
+
+.rv-line.add {
+  background: color-mix(in srgb, var(--ok, #4caf7a) 13%, transparent);
+}
+
+.rv-line.del {
+  background: color-mix(in srgb, var(--danger) 13%, transparent);
+}
+
+.rv-line.note .rv-code {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.rv-feedback {
+  display: flex;
+  flex-direction: column;
+}
+
+.rv-feedback-text {
+  height: 110px;
+  flex: 0 0 auto;
+  font-family: inherit;
+}
+
+.rv-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.rv-spacer {
+  flex: 1 1 auto;
+}
+
+.rv-cleanup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.rv-cleanup input {
+  accent-color: var(--accent);
+}
+
+.task-review-btn {
+  border-color: var(--accent);
+  color: var(--text-strong);
+}

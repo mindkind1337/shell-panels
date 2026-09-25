@@ -22,6 +22,7 @@ import {
   copyMcp,
   hklFromTip
 } from './agentTools'
+import { reviewInfo, reviewDiff, reviewMerge, reviewRemove } from './review'
 
 // ---------------------------------------------------------------------------
 // PTY registry
@@ -701,6 +702,10 @@ ipcMain.handle(
   'git:createWorktree',
   safe(({ cwd, label } = {}) => createWorktree(cwd, label))
 )
+ipcMain.handle('review:info', safe(reviewInfo))
+ipcMain.handle('review:diff', safe(reviewDiff))
+ipcMain.handle('review:merge', safe(reviewMerge))
+ipcMain.handle('review:remove', safe(reviewRemove))
 ipcMain.handle(
   'mcp:list',
   safe((cwd) => listMcp(cwd))
