@@ -91,6 +91,23 @@ describe('pasteAndConfirm', () => {
     expect(state.pastes).toBe(0)
   })
 
+  it('the user is typing in the pane: put back, nothing typed', async () => {
+    const { state, deps } = harness(() => {})
+    expect(await pasteAndConfirm('p', MSG, { ...deps, userTyping: () => true })).toBe('requeue')
+    expect(state.pastes).toBe(0)
+  })
+
+  it('the user starts typing after the paste: no Enter (it would send their text)', async () => {
+    const { state, deps } = harness(() => {})
+    let typing = false
+    const sleep = async (ms) => {
+      state.t += ms
+      typing = true
+    }
+    expect(await pasteAndConfirm('p', MSG, { ...deps, userTyping: () => typing, sleep })).toBe('unconfirmed')
+    expect(state.submits).toBe(0)
+  })
+
   it('an approval prompt before the paste: put back, nothing typed', async () => {
     const { state, deps } = harness(() => {})
     state.approval = true

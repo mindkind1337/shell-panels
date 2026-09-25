@@ -150,6 +150,7 @@ function stateText(m) {
   if (m.review && m.leadReview === 'pending') return `Lead reviewing: ${m.task}`
   if (m.review && m.leadReview === 'approved') return `Approved by lead: ${m.task}`
   if (m.review) return `Ready for review: ${m.task}`
+  if (m.typingHold) return 'Message waits until you send your text'
   if (m.held) return 'Message waits for your approval'
   if (m.track) return m.track.text
   if (m.state === 'limited' && m.reset) return `Usage limit · ${m.reset}`
@@ -629,6 +630,12 @@ defineExpose({
             <span class="ws-session-state" :class="r.s.track ? 'track-' + r.s.track.level : ''" :title="r.s.track ? r.s.track.reason : ''">{{
               picking && r.s.kind === 'agent' && r.s.team ? `In ${teamName(r.s.team)}` : stateText(r.s)
             }}</span>
+            <span
+              v-if="r.s.teamUnread && !picking"
+              class="ws-team-unread"
+              title="Team messages this agent has not read yet (it reads them with its team tools)"
+              >{{ r.s.teamUnread }} team message{{ r.s.teamUnread > 1 ? 's' : '' }} waiting</span
+            >
             <span v-if="r.s.kind === 'agent' && !picking" class="ws-session-task" :class="{ none: !r.s.task }">{{
               r.s.task ? (r.s.track && r.s.track.onTask ? `${r.s.task} · ${r.s.track.onTask}` : r.s.task) : 'No linked task'
             }}</span>

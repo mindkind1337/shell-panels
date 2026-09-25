@@ -5268,3 +5268,9 @@ button.act-stat:hover,
   font-family: var(--mono, 'Cascadia Mono', Consolas, monospace);
   font-size: 11.5px;
 }
+
+.ws-team-unread {
+  color: var(--accent);
+  font-size: 10.5px;
+  white-space: nowrap;
+}

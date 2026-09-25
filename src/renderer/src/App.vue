@@ -161,6 +161,36 @@ const teams = ref([]) // [{ id, name, color }]
 // Panes whose last message was pasted but not seen taken: leafId -> { item }.
 // Nothing else is pasted there until the user resolves it.
 const unsent = reactive({})
+// Team messages waiting to be read, per agent (shown in Sessions).
+const teamUnread = reactive({})
+// The user's own typing, per pane. Tessel never types into a pane where the
+// user has a line in progress (typed, not sent yet) or typed a moment ago:
+// what the user writes is the user's, and is never sent for them.
+const userDraft = reactive({}) // leafId -> true while a typed line is not sent
+const lastUserKey = {}
+const USER_QUIET_MS = 8000
+function noteUserInput(id, data) {
+  const s = String(data || '')
+  // Terminal replies and arrow keys (ESC [ ..., ESC O ...) are not typing;
+  // a paste the user makes (ESC [200~ ... ESC [201~) is.
+  const pasted = s.startsWith('\x1b[200~')
+  // Other escape sequences (arrows, focus, colour and device replies the
+  // terminal sends by itself) are not typing; Esc alone is (it clears).
+  if (s.length > 1 && s.startsWith('\x1b') && !pasted) return
+  if (pasted) {
+    lastUserKey[id] = Date.now()
+    userDraft[id] = true
+    return
+  }
+  lastUserKey[id] = Date.now()
+  if (/[\r\n]/.test(s)) userDraft[id] = false
+  // Ctrl+C, Esc, Ctrl+U clear the line in the agent CLIs.
+  else if (s === '\x03' || s === '\x1b' || s === '\x15') userDraft[id] = false
+  else if (/[^\x00-\x1f\x7f]/.test(s)) userDraft[id] = true
+}
+function userIsTyping(id) {
+  return !!userDraft[id] || Date.now() - (lastUserKey[id] || 0) < USER_QUIET_MS
+}
 
 
 // `tree` and `activeId` always point at the current workspace, so the pane
@@ -387,6 +417,7 @@ async function createLeaf(shellId, agent = null, cwd = null, worktree = null, op
     startDir: res.cwd || cwd || null,
     sessionId: null,
     launchedAt: Date.now(),
+    teamTools: !attached && teamToolsReady,
     exitedAtStart: attached && !!res.exited,
     restoredText,
     broadcast: true
@@ -491,7 +522,8 @@ function serializeNode(node) {
       launchedAt: node.launchedAt || null,
       startDir: node.startDir || null,
       num: node.num || null,
-      team: node.team || null
+      team: node.team || null,
+      teamTools: !!node.teamTools
     }
   }
   return {
@@ -526,6 +558,7 @@ async function deserializeNode(snap, cwd = null) {
     })
     if (!leaf) return null
     if (Number.isInteger(snap.num) && snap.num > 0) leaf.num = snap.num
+    if (snap.teamTools) leaf.teamTools = true
     if (snap.title) leaf.title = snap.title
     leaf.broadcast = snap.broadcast !== false
     if (typeof snap.team === 'string') leaf.team = snap.team
@@ -716,9 +749,12 @@ async function buildGrid(cols, rows, ws = currentWs.value) {
 function routeInput(sourceId, data) {
   if (broadcast.value) {
     forEachLeaf(tree.value, (leaf) => {
-      if (leaf.broadcast) window.shellApi.writePty(leaf.id, data)
+      if (!leaf.broadcast) return
+      noteUserInput(leaf.id, data)
+      window.shellApi.writePty(leaf.id, data)
     })
   } else {
+    noteUserInput(sourceId, data)
     window.shellApi.writePty(sourceId, data)
   }
 }
@@ -2295,7 +2331,8 @@ function flushPending() {
     // One message per pane at a time: it is pasted, Enter is pressed, and
     // Tessel watches the agent take it (src/renderer/src/deliver.js) before
     // the next one goes.
-    if (delivering.has(id) || unsent[id]) {
+    // The user is typing there: wait until the line is sent or cleared.
+    if (delivering.has(id) || unsent[id] || userIsTyping(id)) {
       waiting = true
       continue
     }
@@ -2308,7 +2345,8 @@ function flushPending() {
       isBusy: (pid) => agentStatus[pid] === 'busy',
       awaitingApproval,
       sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-      waitIdle: !!(item.meta && item.meta.waitIdle)
+      waitIdle: !!(item.meta && item.meta.waitIdle),
+      userTyping: userIsTyping
     }
     // A channel message is marked in flight on disk first; if that is
     // refused, it is not typed now ('refused').
@@ -3161,6 +3199,7 @@ async function ackChannel(dir, teamId, d, key, tries = 0) {
   else channelQueued.delete(key)
 }
 
+let teamToolsReady = false
 // The team tools are set up for Claude Code and Codex once a team exists
 // (MCP server "tessel-team" + Claude Code hooks; listed in the MCP dialog).
 let teamToolsAsked = false
@@ -3168,6 +3207,7 @@ async function installTeamToolsOnce() {
   if (teamToolsAsked || !window.shellApi.installTeamTools) return
   teamToolsAsked = true
   const res = await window.shellApi.installTeamTools().catch(() => null)
+  if (res && res.ok && !(res.errors && res.errors.length)) teamToolsReady = true
   if (res && res.ok && res.changed && res.changed.length) {
     showToast(
       'Team messages now go in the background, never into your terminals. Restart the agents of a team once so they can use it (see MCP servers: tessel-team).',
@@ -3175,6 +3215,71 @@ async function installTeamToolsOnce() {
     )
   } else if (res && res.errors && res.errors.length) {
     showToast(`Team messages could not be fully set up: ${res.errors[0]}`, { kind: 'error', timeout: 10000 })
+  }
+}
+
+// Agents started before the team tools were set up do not have them (an
+// agent CLI loads its MCP servers when it starts). Tessel restarts each one
+// once, in place (same pane, number, team and task, conversation resumed),
+// only when it is quiet, not waiting for an approval, and not in use.
+async function restartInPlace(leafId) {
+  const ws = wsOfLeaf(leafId)
+  const old = findLeaf(leafId)
+  if (!ws || !old || old.kind !== 'agent' || !old.agentCommand) return false
+  window.shellApi.killPty(leafId)
+  // Wait until its terminal is really gone, so the new one gets the same id.
+  let gone = false
+  for (let i = 0; i < 40 && !gone; i++) {
+    await new Promise((r) => setTimeout(r, 250))
+    const a = await window.shellApi.attachPty(leafId).catch(() => null)
+    gone = !a || !a.ok
+    if (!gone) window.shellApi.killPty(leafId)
+  }
+  if (!gone) return false
+  dropBuffer(leafId)
+  clearAgentStatus(leafId)
+  const agent = { id: old.agentId, name: old.title, command: old.agentCommand, accent: old.accent }
+  const fresh = await createLeaf(old.shellId, agent, ws.cwd, old.worktree, {
+    id: leafId,
+    sessionId: old.sessionId,
+    resume: !!old.sessionId
+  })
+  if (!fresh) return false
+  Object.assign(fresh, {
+    title: old.title,
+    broadcast: old.broadcast,
+    num: old.num,
+    team: old.team,
+    teamTools: true,
+    gen: (old.gen || 0) + 1
+  })
+  ws.tree = replaceNode(ws.tree, leafId, () => fresh)
+  return true
+}
+
+const restartedForTools = new Set()
+let restarting = false
+async function restartForTeamTools() {
+  if (!teamToolsReady || restarting) return
+  const now = Date.now()
+  for (const team of teams.value) {
+    for (const leaf of teamMembers(team.id)) {
+      if (leaf.kind !== 'agent' || leaf.teamTools || restartedForTools.has(leaf.id)) continue
+      const t = trackedState[leaf.id]
+      const quiet = t && t.state === 'idle' && now - t.since > 60000
+      const inUse = (leaf.id === activeId.value && document.hasFocus()) || userIsTyping(leaf.id)
+      if (!quiet || inUse || approvals[leaf.id] || pendingMessages[leaf.id] || unsent[leaf.id] || delivering.has(leaf.id)) continue
+      restarting = true
+      restartedForTools.add(leaf.id)
+      const title = paneLabel(leaf)
+      try {
+        const ok = await restartInPlace(leaf.id)
+        if (ok) showToast(`Restarted ${title} so it can use team messages. Its conversation continues.`, { timeout: 6000 })
+      } finally {
+        restarting = false
+      }
+      return // one at a time
+    }
   }
 }
 
@@ -3189,9 +3294,21 @@ async function deliverChannel(team, members) {
   if (!TEAM_MESSAGES_IN_TERMINALS) {
     // Agents read and send with the team tools (src/main/teamMcp/server.cjs):
     // Tessel only takes their outboxes in and turns read notes into receipts.
-    await window.shellApi.channel.poll({ dir, teamId: team.id, availableIds: [] })
     if (window.shellApi.channel.acks) await window.shellApi.channel.acks({ dir, teamId: team.id })
-    installTeamToolsOnce()
+    const res = await window.shellApi.channel.poll({ dir, teamId: team.id, availableIds: members.map((m) => m.id) })
+    if (res && res.ok) {
+      const counts = {}
+      for (const d of [...(res.deliveries || []), ...(res.held || [])]) {
+        if (d.fromId === 'tessel' && /^Delivered to /.test(d.text)) continue
+        counts[d.toId] = (counts[d.toId] || 0) + 1
+      }
+      for (const m of members) {
+        if (counts[m.id]) teamUnread[m.id] = counts[m.id]
+        else delete teamUnread[m.id]
+      }
+    }
+    await installTeamToolsOnce()
+    restartForTeamTools()
     return
   }
   const res = await window.shellApi.channel.poll({ dir, teamId: team.id, availableIds: members.map((m) => m.id) })
@@ -3252,6 +3369,11 @@ async function deliverChannel(team, members) {
   for (const d of res.deliveries) {
     const key = `${team.id}:${d.id}:${d.toId}`
     if (channelQueued.has(key)) continue
+    if (d.fromId === 'tessel' && /^Delivered to /.test(d.text)) {
+      channelQueued.add(key)
+      ackChannel(dir, team.id, d, key)
+      continue
+    }
     // Out of usage: it stays on disk until the agent can read it.
     if (limits[d.toId] || !findLeaf(d.toId)) continue
     channelQueued.add(key)
@@ -3713,6 +3835,8 @@ const sessionItems = computed(() => {
       state,
       reset: limits[leaf.id] ? limits[leaf.id].reset : '',
       held: !!pendingMessages[leaf.id],
+      typingHold: !!pendingMessages[leaf.id] && !!userDraft[leaf.id],
+      teamUnread: teamUnread[leaf.id] || 0,
       team: leaf.team || null,
       lead: !!(leaf.team && teamById(leaf.team)?.leadId === leaf.id),
       task: taskOfPane(leaf.id)?.title || null,

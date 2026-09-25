@@ -71,7 +71,7 @@ function startDrag(e, i) {
 
 <template>
   <!-- Leaf: a real terminal -->
-  <TerminalPane v-if="node.type === 'leaf'" :node="node" />
+  <TerminalPane v-if="node.type === 'leaf'" :key="node.id + ':' + (node.gen || 0)" :node="node" />
 
   <!-- Split: N children separated by draggable dividers -->
   <div v-else ref="containerEl" class="split" :class="node.dir">
