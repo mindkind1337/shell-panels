@@ -3199,9 +3199,30 @@ let teamPolling = false
 // empty team list for the MCP tools.
 let teamsReady = false
 
+// Watchdog: a round that never ends (a call that never answers) would stop
+// all team work for good. A round older than 2 minutes is left behind (it
+// can no longer block: rounds are numbered) and a new one starts; the log
+// says at which step it was stuck.
+const TEAM_ROUND_STUCK_MS = 2 * 60 * 1000
+let teamRound = 0
+let teamRoundStart = 0
+let teamStep = ''
+function teamStepIs(what, team) {
+  teamStep = team ? `${what} (${team.name})` : what
+}
+
 async function pollTeams() {
-  if (!teamsReady || teamPolling || !window.shellApi.lead) return
+  if (!teamsReady || !window.shellApi.lead) return
+  if (teamPolling) {
+    const stuck = Date.now() - teamRoundStart
+    if (stuck < TEAM_ROUND_STUCK_MS) return
+    if (window.shellApi.log)
+      window.shellApi.log('error', `team loop: a round was stuck for ${Math.round(stuck / 1000)} s at "${teamStep}"; starting a new one`)
+  }
+  const round = ++teamRound
   teamPolling = true
+  teamRoundStart = Date.now()
+  teamStepIs('start')
   try {
     for (const team of [...teams.value]) {
       const dir = teamDir(team.id)
@@ -3219,7 +3240,9 @@ async function pollTeams() {
       }
       if (!dir) {
         // The channel keeps its own folder (channelDir): still deliver.
+        teamStepIs('channel set-up', team)
         await syncChannel(team)
+        teamStepIs('channel delivery', team)
         await deliverChannel(team, members)
         continue
       }
@@ -3232,6 +3255,7 @@ async function pollTeams() {
           if (team.leadId === m.id) await restoreLeadInbox(team, m)
           continue
         }
+        teamStepIs('inbox', team)
         const res = await window.shellApi.lead.take({ dir, token })
         // Its folder is gone (deleted by hand?): make it again next round.
         if (res && res.ok && res.missing) {
@@ -3258,12 +3282,16 @@ async function pollTeams() {
           teamId: team.id
         })
       }
+      teamStepIs('channel set-up', team)
       await syncChannel(team)
+      teamStepIs('channel delivery', team)
       await deliverChannel(team, members)
     }
+    teamStepIs('team map')
     await publishCurrentTeams()
   } finally {
-    teamPolling = false
+    // A round left behind by the watchdog does not end the current one.
+    if (round === teamRound) teamPolling = false
   }
 }
 
@@ -3755,7 +3783,9 @@ async function deliverChannel(team, members) {
   if (!TEAM_MESSAGES_IN_TERMINALS) {
     // Agents read and send with the team tools (src/main/teamMcp/server.cjs):
     // Tessel only takes their outboxes in and turns read notes into receipts.
+    teamStepIs('read notes', team)
     if (window.shellApi.channel.acks) await window.shellApi.channel.acks({ dir, teamId: team.id })
+    teamStepIs('channel read', team)
     const res = await window.shellApi.channel.poll({ dir, teamId: team.id, availableIds: members.map((m) => m.id) })
     if (res && res.ok) {
       // Complete counts per member from the channel (the delivery list is
@@ -3774,8 +3804,10 @@ async function deliverChannel(team, members) {
       }
       for (const m of members) wakeIfNeeded(m)
       logTeamMessages(team, res)
+      teamStepIs('read status', team)
       await refreshOldUnread(team, dir, res.history)
     }
+    teamStepIs('task board', team)
     await syncTeamBoard(team, dir, members)
     installTeamToolsOnce() // runs on its own (Claude and Codex take a while)
     restartForTeamTools()
@@ -4563,10 +4595,22 @@ async function restoreOrSeedLayout() {
   await buildGrid(3, 2, ws)
 }
 
+// Startup that never finishes leaves teams off (teamsReady): logged, with
+// the step it is at.
+let startStep = 'shells'
+const startWatch = setTimeout(() => {
+  if (!teamsReady && window.shellApi.log)
+    window.shellApi.log('error', `startup not finished after 60 s, at "${startStep}": team work is waiting for it`)
+}, 60000)
+onBeforeUnmount(() => clearTimeout(startWatch))
+
 onMounted(async () => {
   shells.value = await window.shellApi.listShells()
+  startStep = 'agents list'
   agents.value = await window.shellApi.listAgents()
+  startStep = 'layout'
   await restoreOrSeedLayout()
+  startStep = 'terminals'
   if (window.shellApi.reconcilePtys) {
     const ids = []
     forEachWsLeaf((l) => ids.push(l.id))
@@ -4574,6 +4618,7 @@ onMounted(async () => {
   }
   loadVoiceLanguages()
   // Settings (incl. your own agents) are loaded now; detect agents with them.
+  startStep = 'agent detection'
   await loadAgents()
   watch(
     () => settings.customAgents.map((a) => a.command).join('|'),
@@ -4610,6 +4655,7 @@ onMounted(async () => {
   // any change. The watch is registered AFTER hydration so loading the saved
   // tasks doesn't immediately trigger a redundant save.
   try {
+    startStep = 'task board'
     const saved = await window.shellApi.taskBoard.load({ withLedger: true })
     const savedTasks = Array.isArray(saved) ? saved : saved && saved.tasks
     if (Array.isArray(savedTasks)) setTasks(savedTasks)
