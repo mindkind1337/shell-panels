@@ -32,6 +32,7 @@ import NewTaskDialog from './components/NewTaskDialog.vue'
 import ReviewPanel from './components/ReviewPanel.vue'
 import { parseLeadRequest, findTaskRef, leadGuide, memberGuide } from '../../shared/leadRequests'
 import { trackAgent } from '../../shared/tracking'
+import { pasteAndConfirm } from './deliver'
 import { dropBuffer, seedBuffer } from './ptyStore'
 import { tasks as boardTasks, setTasks, updateTask, removeTask, addTask } from './taskBoardStore'
 
@@ -2161,6 +2162,8 @@ function awaitingApproval(leafId) {
 
 // Messages waiting for an agent to be free: leafId -> [text].
 const pendingMessages = reactive({})
+// Panes a message is being pasted into and confirmed right now.
+const delivering = new Set()
 let pendingTimer = null
 
 // meta: { source: 'you' | 'tessel', scope: 'team' | 'workspace' | 'notes' |
@@ -2241,59 +2244,49 @@ function flushPending() {
         continue
       }
     }
-    // Messages that wait for a quiet agent go one at a time: each gets its
-    // own check (the previous one makes the agent busy again).
-    const queue = m && m.waitIdle ? pendingMessages[id].splice(0, 1) : pendingMessages[id].splice(0)
+    // One message per pane at a time: it is pasted, Enter is pressed, and
+    // Tessel watches the agent take it (src/renderer/src/deliver.js) before
+    // the next one goes.
+    if (delivering.has(id)) {
+      waiting = true
+      continue
+    }
+    const item = pendingMessages[id].shift()
     if (pendingMessages[id].length) waiting = true
     else delete pendingMessages[id]
-    queue.forEach((item, i) =>
-      setTimeout(() => {
-        // Checked again at paste time: the pane may be gone, or an approval
-        // prompt may have appeared since.
-        const p = getPane(id)
-        if (!p || !findLeaf(id)) return failDelivery(item)
-        if (awaitingApproval(id)) return requeueDelivery(id, item)
-        if (item.meta && item.meta.waitIdle && agentStatus[id] === 'busy') return requeueDelivery(id, item)
-        try {
-          p.paste(item.text)
-        } catch {
-          return failDelivery(item)
+    delivering.add(id)
+    pasteAndConfirm(id, item.text, {
+      getPane: (pid) => (findLeaf(pid) ? getPane(pid) : null),
+      isBusy: (pid) => agentStatus[pid] === 'busy',
+      awaitingApproval,
+      sleep: (ms) => new Promise((r) => setTimeout(r, ms))
+    })
+      .catch(() => 'failed')
+      .then((result) => {
+        delivering.delete(id)
+        if (result === 'confirmed') {
+          if (item.held) logMessage(id, 'delivered', item.text, item.meta)
+          if (item.meta && item.meta.onDelivered) item.meta.onDelivered()
+        } else if (result === 'requeue') {
+          requeueDelivery(id, item)
+        } else if (result === 'unconfirmed') {
+          // Pasted, but the agent did not visibly take it: not acknowledged,
+          // and not pasted again blindly. The user can check.
+          logMessage(id, 'unconfirmed', item.text, item.meta)
+          const leaf = findLeaf(id)
+          showToast(`A message to ${leaf ? leaf.title : 'an agent'} may not have been sent: check its input box.`, {
+            kind: 'attention',
+            timeout: 10000,
+            action: { label: 'Show', run: () => focusPane(id) }
+          })
+        } else {
+          failDelivery(item)
         }
-        // Press Enter; if the text still sits in the agent's input box a
-        // moment later (the key got lost, e.g. while the CLI was redrawing),
-        // press it again, twice at most. Only then is it delivered.
-        const submit = (tries) => {
-          const q = getPane(id)
-          // Never press Enter into an approval prompt.
-          if (!q || awaitingApproval(id)) return failDelivery(item)
-          try {
-            q.submit()
-          } catch {
-            return failDelivery(item)
-          }
-          setTimeout(() => {
-            const r = getPane(id)
-            if (!r) return failDelivery(item)
-            if (tries < 2 && !awaitingApproval(id) && stillTyped(r, item.text)) return submit(tries + 1)
-            if (item.meta && item.meta.onDelivered) item.meta.onDelivered()
-          }, 1500)
-        }
-        setTimeout(() => submit(0), 500)
-        if (item.held) logMessage(id, 'delivered', item.text, item.meta)
-      }, i * 1500)
-    )
+        flushPending()
+      })
   }
   clearTimeout(pendingTimer)
   pendingTimer = waiting ? setTimeout(flushPending, 2000) : null
-}
-
-// The end of a pasted message is still on the input line at the bottom of
-// the agent's screen: it was not submitted.
-function stillTyped(pane, text) {
-  if (!pane.screenText) return false
-  const tail = String(text || '').replace(/\s+/g, ' ').trim().slice(-24)
-  if (tail.length < 8) return false
-  return pane.screenText(4).replace(/\s+/g, ' ').includes(tail)
 }
 
 function failDelivery(item) {

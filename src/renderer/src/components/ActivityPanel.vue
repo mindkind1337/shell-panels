@@ -187,7 +187,9 @@ function describe(x) {
           ? 'held until the approval prompt was answered'
           : x.status === 'skipped'
             ? 'not sent: usage limit'
-            : 'sent'
+            : x.status === 'unconfirmed'
+              ? 'pasted, but not seen taken: check the input box'
+              : 'sent'
       return { who, text: `→ ${x.title}${to}: “${x.preview}”`, note: how }
     }
     case 'task':
