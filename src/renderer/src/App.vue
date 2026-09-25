@@ -2187,13 +2187,26 @@ async function resolveUnsent(id) {
     altLabel: 'Send again'
   })
   if (!unsent[id] || unsent[id] !== u) return
+  const meta = u.item.meta || {}
   if (answer === true) {
-    delete unsent[id]
-    if (u.item.held) logMessage(id, 'delivered', u.item.text, u.item.meta)
-    if (u.item.meta && u.item.meta.onDelivered) u.item.meta.onDelivered()
+    // Recorded first; the pane stays held if that fails.
+    const ok = meta.confirmSent ? await meta.confirmSent() : true
+    if (!ok) {
+      showToast('Tessel could not record that. Try again.', { kind: 'error' })
+      return
+    }
+    if (unsent[id] === u) delete unsent[id]
+    if (u.item.held) logMessage(id, 'delivered', u.item.text, meta)
+    if (!meta.confirmSent && meta.onDelivered) meta.onDelivered()
   } else if (answer === 'alt') {
-    delete unsent[id]
-    const handled = u.item.meta && u.item.meta.onRetry ? await u.item.meta.onRetry() : false
+    // A channel message is released on disk and delivered again by the
+    // channel; anything else is queued again here.
+    const handled = meta.onRetry ? await meta.onRetry() : false
+    if (handled === null) {
+      showToast('Tessel could not record that. Try again.', { kind: 'error' })
+      return
+    }
+    if (unsent[id] === u) delete unsent[id]
     if (!handled) requeueDelivery(id, u.item)
   } else return
   flushPending()
@@ -3181,9 +3194,16 @@ async function deliverChannel(team, members) {
     // is on disk, tried again by a later poll.
     onRefused: () => channelQueued.delete(key),
     onUncertain: () => api.hold({ ...where, id: d.id, toId: d.toId, state: 'uncertain' }),
+    // The user says it was sent: acknowledged on disk (true when recorded).
+    confirmSent: async () => {
+      const r = await api.ack({ ...where, id: d.id, toId: d.toId }).catch(() => null)
+      return !!(r && r.ok)
+    },
+    // The user cleared the draft and asked for another try: true once
+    // released on disk, null if that failed.
     onRetry: async () => {
-      // The user cleared the draft and asked for another try.
-      await api.release({ ...where, id: d.id, toId: d.toId })
+      const r = await api.release({ ...where, id: d.id, toId: d.toId }).catch(() => null)
+      if (!r || !r.ok) return null
       channelQueued.delete(key)
       return true
     }
