@@ -1992,12 +1992,17 @@ function savedStateBefore(id) {
   return last
 }
 
+// The saved start is taken back once per pane at most, and never after the
+// pane has been seen working in this session: from then on its states are
+// new episodes, timed from when they are seen.
+const restoreDone = {} // leafId -> true
+
 function restoreSince(id) {
   const t = trackedState[id]
-  if (!t || !activityLoaded || t.restoreTried === t.state) return
-  t.restoreTried = t.state
+  if (!t || !activityLoaded || restoreDone[id]) return
   const prev = savedStateBefore(id)
   if (prev && prev.state === t.state) {
+    restoreDone[id] = true
     t.since = prev.since || prev.t
     t.sinceStart = false
     if (lastStateEvent[id]) {
@@ -2073,7 +2078,9 @@ function logState(id, info, state) {
   loggedState[id] = state
   // The tracking clock follows logged states only, so a short burst (a
   // pasted message echoing, a redraw) does not restart it.
-  const early = Date.now() - appStartedAt < RESTORE_WINDOW_MS
+  // Seen working: whatever it does next is observed from the start.
+  if (state === 'working') restoreDone[id] = true
+  const early = Date.now() - appStartedAt < RESTORE_WINDOW_MS && !restoreDone[id]
   if (state === 'closed') {
     delete trackedState[id]
     delete lastStateEvent[id]
