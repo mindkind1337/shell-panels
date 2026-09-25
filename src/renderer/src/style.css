@@ -3485,6 +3485,26 @@ body.pane-dragging * {
   }
 }
 
+/* Narrow windows (640 px minimum): comes after the .tb-left rules so it wins. */
+@media (max-width: 820px) {
+  /* A long workspace name gives way (ellipsis) instead of pushing the
+     buttons under the Windows overlay. */
+  .tb-left {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+  .tb-left .menu-group,
+  .tb-ws {
+    min-width: 0;
+  }
+  .tb-center {
+    padding: 0 4px;
+  }
+  .tb-left .brand-name {
+    display: none;
+  }
+}
+
 /* ================= Command palette ================= */
 .pal-backdrop {
   position: fixed;
