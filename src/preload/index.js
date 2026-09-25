@@ -55,7 +55,9 @@ const api = {
   channel: {
     ensure: (args) => ipcRenderer.invoke('channel:ensure', args),
     poll: (args) => ipcRenderer.invoke('channel:poll', args),
-    ack: (args) => ipcRenderer.invoke('channel:ack', args)
+    ack: (args) => ipcRenderer.invoke('channel:ack', args),
+    hold: (args) => ipcRenderer.invoke('channel:hold', args),
+    release: (args) => ipcRenderer.invoke('channel:release', args)
   },
   review: {
     info: (args) => ipcRenderer.invoke('review:info', args),

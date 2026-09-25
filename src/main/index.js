@@ -24,7 +24,13 @@ import {
 } from './agentTools'
 import { reviewInfo, reviewDiff, reviewMerge, reviewRemove } from './review'
 import { ensureInbox, takeInbox, removeInbox } from './leadInbox'
-import { ensureTeamChannel, pollTeamChannel, ackTeamDelivery } from './teamChannel'
+import {
+  ensureTeamChannel,
+  pollTeamChannel,
+  ackTeamDelivery,
+  holdTeamDelivery,
+  releaseTeamDelivery
+} from './teamChannel'
 
 // ---------------------------------------------------------------------------
 // PTY registry
@@ -714,6 +720,8 @@ ipcMain.handle('lead:remove', safe(removeInbox))
 ipcMain.handle('channel:ensure', safe(ensureTeamChannel))
 ipcMain.handle('channel:poll', safe(pollTeamChannel))
 ipcMain.handle('channel:ack', safe(ackTeamDelivery))
+ipcMain.handle('channel:hold', safe(holdTeamDelivery))
+ipcMain.handle('channel:release', safe(releaseTeamDelivery))
 ipcMain.handle(
   'mcp:list',
   safe((cwd) => listMcp(cwd))

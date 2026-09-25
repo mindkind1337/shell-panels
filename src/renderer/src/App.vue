@@ -2193,8 +2193,8 @@ async function resolveUnsent(id) {
     if (u.item.meta && u.item.meta.onDelivered) u.item.meta.onDelivered()
   } else if (answer === 'alt') {
     delete unsent[id]
-    if (u.item.meta && u.item.meta.onRetry) u.item.meta.onRetry()
-    requeueDelivery(id, u.item)
+    const handled = u.item.meta && u.item.meta.onRetry ? await u.item.meta.onRetry() : false
+    if (!handled) requeueDelivery(id, u.item)
   } else return
   flushPending()
 }
@@ -2293,13 +2293,18 @@ function flushPending() {
     if (pendingMessages[id].length) waiting = true
     else delete pendingMessages[id]
     delivering.add(id)
-    pasteAndConfirm(id, item.text, {
+    const deps = {
       getPane: (pid) => (findLeaf(pid) ? getPane(pid) : null),
       isBusy: (pid) => agentStatus[pid] === 'busy',
       awaitingApproval,
       sleep: (ms) => new Promise((r) => setTimeout(r, ms))
-    })
-      .catch(() => 'failed')
+    }
+    // A channel message is marked in flight on disk first; if that is
+    // refused, it is not typed now ('refused').
+    Promise.resolve(item.meta && item.meta.beforePaste ? item.meta.beforePaste() : true)
+      .catch(() => false)
+      .then((ok) => (ok ? pasteAndConfirm(id, item.text, deps) : 'refused'))
+      .catch(() => 'unconfirmed')
       .then((result) => {
         delivering.delete(id)
         if (result === 'confirmed') {
@@ -2307,6 +2312,8 @@ function flushPending() {
           if (item.meta && item.meta.onDelivered) item.meta.onDelivered()
         } else if (result === 'requeue') {
           requeueDelivery(id, item)
+        } else if (result === 'refused') {
+          if (item.meta && item.meta.onRefused) item.meta.onRefused()
         } else if (result === 'unconfirmed') {
           // Pasted, but the agent did not visibly take it: not acknowledged,
           // not pasted again blindly, and nothing else goes to this pane (it
@@ -3148,6 +3155,51 @@ async function deliverChannel(team, members) {
   const res = await window.shellApi.channel.poll({ dir, teamId: team.id, availableIds: members.map((m) => m.id) })
   if (!res || !res.ok) return
   const who = Object.fromEntries((res.participants || []).map((p) => [p.id, p]))
+  const textOf = (d) => {
+    const from = who[d.fromId]
+    return d.fromId === 'tessel'
+      ? `[Tessel] ${d.text}`
+      : `[From #${from ? from.num : '?'} ${from ? from.title : 'teammate'}, team "${team.name}", message ${d.id}${d.replyTo ? `, reply to ${d.replyTo}` : ''}] ${d.text}`
+  }
+  const api = window.shellApi.channel
+  const where = { dir, teamId: team.id }
+  // What happens to a delivery, on disk: held in flight before it is typed,
+  // uncertain if the agent did not visibly take it, released to try again,
+  // acknowledged once taken.
+  const hooks = (d, key) => ({
+    beforePaste: async () => {
+      const r = await api.hold({ ...where, id: d.id, toId: d.toId, state: 'inflight' })
+      return !!(r && r.ok)
+    },
+    onDelivered: () => ackChannel(dir, team.id, d, key),
+    onFailed: async () => {
+      // Nothing was typed: it can go again later.
+      await api.release({ ...where, id: d.id, toId: d.toId })
+      channelQueued.delete(key)
+    },
+    // Not held (the recipient has another unresolved message): left as it
+    // is on disk, tried again by a later poll.
+    onRefused: () => channelQueued.delete(key),
+    onUncertain: () => api.hold({ ...where, id: d.id, toId: d.toId, state: 'uncertain' }),
+    onRetry: async () => {
+      // The user cleared the draft and asked for another try.
+      await api.release({ ...where, id: d.id, toId: d.toId })
+      channelQueued.delete(key)
+      return true
+    }
+  })
+  // Held on disk but not handled in this session: Tessel stopped or reloaded
+  // while it was being typed or checked. Never typed again blindly: the pane
+  // shows "message not confirmed" and the user decides.
+  for (const d of res.held || []) {
+    const key = `${team.id}:${d.id}:${d.toId}`
+    if (channelQueued.has(key) || !findLeaf(d.toId) || unsent[d.toId]) continue
+    channelQueued.add(key)
+    unsent[d.toId] = {
+      item: { text: textOf(d), held: false, meta: { source: 'agent', scope: 'team', teamId: team.id, ...hooks(d, key) } },
+      at: d.heldAt || Date.now()
+    }
+  }
   for (const d of res.deliveries) {
     const key = `${team.id}:${d.id}:${d.toId}`
     if (channelQueued.has(key)) continue
@@ -3155,18 +3207,13 @@ async function deliverChannel(team, members) {
     if (limits[d.toId] || !findLeaf(d.toId)) continue
     channelQueued.add(key)
     const from = who[d.fromId]
-    const text =
-      d.fromId === 'tessel'
-        ? `[Tessel] ${d.text}`
-        : `[From #${from ? from.num : '?'} ${from ? from.title : 'teammate'}, team "${team.name}", message ${d.id}${d.replyTo ? `, reply to ${d.replyTo}` : ''}] ${d.text}`
-    deliverToAgent(d.toId, text, {
+    deliverToAgent(d.toId, textOf(d), {
       source: d.fromId === 'tessel' ? 'tessel' : 'agent',
       scope: 'team',
       teamId: team.id,
       from: from ? from.title : null,
       waitIdle: true,
-      onDelivered: () => ackChannel(dir, team.id, d, key),
-      onFailed: () => channelQueued.delete(key)
+      ...hooks(d, key)
     })
   }
 }
