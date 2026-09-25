@@ -2133,6 +2133,7 @@ function flushPending() {
         const p = getPane(id)
         if (!p || !findLeaf(id)) return failDelivery(item)
         if (awaitingApproval(id)) return requeueDelivery(id, item)
+        if (item.meta && item.meta.waitIdle && agentStatus[id] === 'busy') return requeueDelivery(id, item)
         try {
           p.paste(item.text)
         } catch {
@@ -2603,10 +2604,13 @@ async function setTeamLead(teamId, leafId) {
   let box = null
   if (leaf) {
     const mates = teamMembers(teamId).filter((l) => l.id !== leaf.id)
+    const boxes = await syncChannel(team, { quiet: [leaf.id] })
+    const outbox = boxes && boxes[leaf.id] ? boxes[leaf.id].outbox : null
     box = await assignInbox(team, leaf, (inbox) =>
       leadGuide({
         teamName: team.name,
         inbox,
+        outbox,
         members: mates.map(agentLabel),
         kinds: taskAgentKinds.value.map((a) => a.id)
       })
@@ -2937,11 +2941,11 @@ async function syncChannel(team, opts = {}) {
   for (const m of members) {
     const box = boxes[m.id]
     if (!box || team.channelTold[m.id] === box.outbox) continue
-    const quiet = opts.quiet && opts.quiet.includes(m.id)
-    // Out of usage: tellAgents would skip it; tell it on a later round.
-    if (!quiet && limits[m.id]) continue
+    // Out of usage: tellAgents (and the welcome) skip it; it is told on a
+    // later round, once the limit is over.
+    if (limits[m.id]) continue
     team.channelTold[m.id] = box.outbox
-    if (quiet) continue
+    if (opts.quiet && opts.quiet.includes(m.id)) continue
     tellAgents([m], `[Tessel] Team "${team.name}": talk to your teammates directly through the team channel, not through the user.\n${box.guide}`, team.id)
   }
   for (const id of Object.keys(team.channelTold)) if (!boxes[id]) delete team.channelTold[id]

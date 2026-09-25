@@ -97,15 +97,17 @@ export function memberGuide({ teamName, inbox, me, members, lead }) {
 
 // What the lead is told when it takes the role (also written as HOW-TO.md in
 // its inbox).
-export function leadGuide({ teamName, inbox, members, kinds }) {
+export function leadGuide({ teamName, inbox, members, kinds, outbox = null }) {
   return [
     `You now lead the team "${teamName}". Your teammates: ${members.length ? members.join(', ') : 'none yet'}.`,
     'Your job: split the goal into small tasks, give each to a teammate (or start a new agent), review what they finish, and tell the user when work is ready. You do not merge, discard or close anything: the user does that.',
-    `To act, write one JSON file per request into ${inbox} (any name ending in .json). Tessel reads it within a few seconds, deletes it, and answers here with [Tessel] lines.`,
+    `To give tasks and review, write one JSON file per request into ${inbox} (any name ending in .json). Tessel reads it within a few seconds, deletes it, and answers here with [Tessel] lines.`,
     '- Give a task: {"action":"task","title":"Short title","brief":"What to do, which files, how to check it","agent":"#3"}. "agent" is a teammate number, or ' +
       (kinds.length ? kinds.map((k) => `"${k}"`).join(', ') : 'an agent kind') +
       ' to start a new agent. New agents work in their own copy (git branch); if the project cannot have one, the request is refused: add "own_copy": false to work in the project folder instead.',
-    '- Message: {"action":"message","to":"#3","text":"..."} or "to":"team". Teammates write to you the same way; their messages appear here.',
+    outbox
+      ? `- Messages go through the team channel, not this folder: write {"to":"#3","text":"..."} (or "to":"team") as a .json file into your channel outbox ${outbox}. It waits until the teammate can read it, and you get a receipt. Teammates' messages appear here.`
+      : '- Message: {"action":"message","to":"#3","text":"..."} or "to":"team". Teammates write to you the same way; their messages appear here.',
     '- After a teammate finishes, you get a review request with the task id. Then either {"action":"approve","task":"<task id>","note":"why it is good"} (the user is told it is ready to merge) or {"action":"changes","task":"<task id>","text":"what to fix"} (it goes back to the teammate).',
     'Keep tasks independent so teammates do not edit the same files at once.'
   ].join('\n')
