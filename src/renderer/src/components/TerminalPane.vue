@@ -795,8 +795,12 @@ onMounted(() => {
       markActivity()
     }
   })
-  unsubExit = window.shellApi.onExit(({ id, exitCode: code }) => {
+  unsubExit = window.shellApi.onExit(({ id, exitCode: code, pid }) => {
     if (id === props.node.id && term) {
+      // A pane restarted in place keeps its id: the end of the process it
+      // replaced is not this pane's end (a late notice from the old one).
+      if (pid && props.node.pid && pid !== props.node.pid) return
+      if (!pid && props.node.restartedAt && Date.now() - props.node.restartedAt < 10000) return
       exited.value = true
       exitCode.value = code
       term.write(`\r\n\x1b[33m[process exited with code ${code}]\x1b[0m\r\n`)

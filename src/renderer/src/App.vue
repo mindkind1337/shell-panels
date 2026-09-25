@@ -1492,6 +1492,13 @@ async function restartLeaf(leafId) {
   if (!fresh) return
   fresh.title = old.title
   fresh.broadcast = old.broadcast
+  if (old.num) fresh.num = old.num
+  if (old.team && teamById(old.team)) {
+    fresh.team = old.team
+    const team = teamById(old.team)
+    if (team.leadId === leafId) team.leadId = fresh.id
+  }
+  for (const t of boardTasks) if (t.paneId === leafId) updateTask(t.id, { paneId: fresh.id })
   ws.tree = replaceNode(ws.tree, leafId, () => fresh)
   if (ws.activeId === leafId) ws.activeId = fresh.id
   if (maximizedId.value === leafId) maximizedId.value = fresh.id
@@ -3293,7 +3300,8 @@ async function restartInPlace(leafId) {
     num: old.num,
     team: old.team,
     teamTools: true,
-    gen: (old.gen || 0) + 1
+    gen: (old.gen || 0) + 1,
+    restartedAt: Date.now()
   })
   ws.tree = replaceNode(ws.tree, leafId, () => fresh)
   return true

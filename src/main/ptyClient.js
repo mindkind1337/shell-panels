@@ -46,7 +46,7 @@ export function createPtyClient({ pipe, token, startHost, log, onData, onExit, o
           clearTimeout(w.timer)
           w.resolve(msg)
         } else if (msg.op === 'data') onData(msg.id, msg.data)
-        else if (msg.op === 'exit') onExit(msg.id, msg.exitCode, msg.signal)
+        else if (msg.op === 'exit') onExit(msg.id, msg.exitCode, msg.signal, msg.pid)
       }
     })
     const lost = () => {

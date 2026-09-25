@@ -1013,7 +1013,7 @@ const host = createPtyClient({
   // Output is batched per terminal (every ~8 ms) instead of one message per
   // chunk: a busy agent can print thousands of small chunks a second.
   onData: (id, data) => queueData(id, data),
-  onExit: (id, exitCode, signal) => {
+  onExit: (id, exitCode, signal, pid) => {
     flushData() // deliver the last output before the exit notice
     const info = ptyInfo.get(id)
     if (exitCode && info) {
@@ -1022,7 +1022,7 @@ const host = createPtyClient({
         `${info.shellName} ${id} exited with code ${exitCode}${signal ? ` (signal ${signal})` : ''}`
       )
     }
-    send('pty:exit', { id, exitCode, signal })
+    send('pty:exit', { id, exitCode, signal, pid: pid || null })
   },
   onLost: () => {
     if (quitting) return

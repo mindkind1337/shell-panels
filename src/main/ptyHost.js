@@ -200,7 +200,7 @@ function handle(sock, msg) {
         entry.exitCode = exitCode
         entry.signal = signal
         entry.child = null
-        broadcast({ op: 'exit', id: msg.id, exitCode, signal })
+        broadcast({ op: 'exit', id: msg.id, exitCode, signal, pid: child.pid })
         checkIdle()
       })
       reply({ ok: true, pid: child.pid })
