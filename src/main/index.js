@@ -23,6 +23,7 @@ import {
   hklFromTip
 } from './agentTools'
 import { reviewInfo, reviewDiff, reviewMerge, reviewRemove } from './review'
+import { ensureInbox, takeInbox, removeInbox } from './leadInbox'
 
 // ---------------------------------------------------------------------------
 // PTY registry
@@ -706,6 +707,9 @@ ipcMain.handle('review:info', safe(reviewInfo))
 ipcMain.handle('review:diff', safe(reviewDiff))
 ipcMain.handle('review:merge', safe(reviewMerge))
 ipcMain.handle('review:remove', safe(reviewRemove))
+ipcMain.handle('lead:ensure', safe(ensureInbox))
+ipcMain.handle('lead:take', safe(takeInbox))
+ipcMain.handle('lead:remove', safe(removeInbox))
 ipcMain.handle(
   'mcp:list',
   safe((cwd) => listMcp(cwd))

@@ -45,6 +45,12 @@ const api = {
   gitInfo: (cwd) => ipcRenderer.invoke('git:info', cwd),
   createWorktree: (cwd, label) => ipcRenderer.invoke('git:createWorktree', { cwd, label }),
   // Review and merge a task branch: { root, path, branch, target, ... }.
+  // A team lead's inbox folder: { dir, token, guide }.
+  lead: {
+    ensure: (args) => ipcRenderer.invoke('lead:ensure', args),
+    take: (args) => ipcRenderer.invoke('lead:take', args),
+    remove: (args) => ipcRenderer.invoke('lead:remove', args)
+  },
   review: {
     info: (args) => ipcRenderer.invoke('review:info', args),
     diff: (args) => ipcRenderer.invoke('review:diff', args),

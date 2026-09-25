@@ -5147,3 +5147,30 @@ button.act-stat:hover,
   border-color: var(--accent);
   color: var(--text-strong);
 }
+
+/* Team lead: a quiet tag in Sessions and on task cards. */
+.ws-lead-tag {
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  vertical-align: 1px;
+}
+
+.task-lead {
+  padding: 0 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.task-lead.approved {
+  border-color: color-mix(in srgb, var(--ok, #4caf7a) 60%, transparent);
+  color: var(--text-strong);
+}

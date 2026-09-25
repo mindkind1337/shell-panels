@@ -30,6 +30,7 @@ import ConfirmDialog from './components/ConfirmDialog.vue'
 import NotesPanel from './components/NotesPanel.vue'
 import NewTaskDialog from './components/NewTaskDialog.vue'
 import ReviewPanel from './components/ReviewPanel.vue'
+import { parseLeadRequest, findTaskByTitle, leadGuide } from '../../shared/leadRequests'
 import { dropBuffer, seedBuffer } from './ptyStore'
 import { tasks as boardTasks, setTasks, updateTask, removeTask, addTask } from './taskBoardStore'
 
@@ -885,6 +886,8 @@ provide('panelCtx', {
   voiceName,
   teamById,
   leaveTeam,
+  setTeamLead,
+  teamLead,
   taskOfPane,
   agentReportedDone,
   copied: (what) => showToast(`${what} copied.`, { timeout: 2000 })
@@ -2082,6 +2085,7 @@ function logMessage(leafId, status, text, meta = {}) {
     agent: agentInfo(leaf),
     status,
     source: meta.source || 'you',
+    from: meta.from || null,
     scope: meta.scope || 'workspace',
     teamId: meta.teamId || null,
     wsId: wsOfLeaf(leafId)?.id || null,
@@ -2189,20 +2193,32 @@ function taskPrompt(task, ws) {
       'In your last commit message, list the checks you ran (tests, build) and their results. ' +
       'If the project needs its dependencies installed, install them in this copy (for example npm ci); never link them to another folder.'
     : `You work directly in the project folder ${(ws && ws.cwd) || ''}. Other agents may work there too: check .tessel/notes.md before editing shared files.`
+  const lead = task.teamId ? teamLead(task.teamId) : null
+  const team = lead ? `You are in team "${teamById(task.teamId).name}", led by ${paneLabel(lead)}: it gave you this task and reviews your work when you finish. Ask it if something is unclear.\n\n` : ''
   return (
     `[Tessel task] ${task.title}\n\n` +
     (task.brief ? `${task.brief}\n\n` : '') +
+    team +
     `${where}\n\n` +
     'When the task is complete and checked, end your last message with a line that contains only the words TASK and COMPLETE joined by an underscore, and nothing else on that line.'
   )
 }
 
-async function startTask(spec) {
+// opts (for a team lead): { ws, nextTo: leaf id to open the agent next to,
+// teamId: the team the task belongs to (a new agent joins it) }.
+// -> { task, leaf } or { error }.
+async function startTask(spec, opts = {}) {
   newTaskOpen.value = false
-  const ws = currentWs.value
-  if (!ws || !spec || !spec.title) return
+  const ws = opts.ws || currentWs.value
+  if (!ws || !spec || !spec.title) return { error: 'no workspace' }
   const task = addTask({ title: spec.title, wsId: ws.id })
-  updateTask(task.id, { brief: spec.brief || '', column: 'doing', reviewerId: spec.reviewerId || null, startedAt: Date.now() })
+  updateTask(task.id, {
+    brief: spec.brief || '',
+    column: 'doing',
+    reviewerId: spec.reviewerId || null,
+    startedAt: Date.now(),
+    teamId: opts.teamId || null
+  })
 
   let leaf = null
   let fresh = false
@@ -2212,13 +2228,14 @@ async function startTask(spec) {
     if (why) {
       removeTask(task.id)
       showToast(`${leaf ? leaf.title : 'That agent'} cannot take this task: ${why}.`, { kind: 'error', timeout: 7000 })
-      return
+      return { error: `${leaf ? paneLabel(leaf) : 'that agent'} cannot take it: ${why}` }
     }
   } else {
     const agent = agentById(spec.agent.id)
     if (!agent) {
+      removeTask(task.id)
       showToast('That agent is not available.', { kind: 'error' })
-      return
+      return { error: 'that agent kind is not available' }
     }
     let worktree = null
     if (spec.isolated) {
@@ -2229,12 +2246,13 @@ async function startTask(spec) {
           kind: 'error',
           timeout: 9000
         })
-        return
+        return { error: `could not make a separate copy: ${(res && res.error) || 'unknown error'}` }
       }
       worktree = { path: res.path, branch: res.branch, baseBranch: res.baseBranch || null, root: res.root || ws.cwd }
       updateTask(task.id, { worktree })
     }
-    const target = ws.activeId && findLeaf(ws.activeId) ? ws.activeId : null
+    const target =
+      opts.nextTo && findLeaf(opts.nextTo) ? opts.nextTo : ws.activeId && findLeaf(ws.activeId) ? ws.activeId : null
     leaf = target
       ? await splitLeaf(target, 'row', agent, selectedShell.value, worktree)
       : await createLeaf(selectedShell.value, agent, ws.cwd, worktree)
@@ -2247,7 +2265,14 @@ async function startTask(spec) {
   if (!leaf) {
     updateTask(task.id, { column: 'todo' })
     showToast('Could not start the agent. The task stays in To do.', { kind: 'error' })
-    return
+    return { error: 'could not start the agent' }
+  }
+  // A new agent started by a lead joins its team (told in the task itself).
+  if (fresh && opts.teamId && teamById(opts.teamId)) {
+    const before = teamMembers(opts.teamId)
+    leaf.team = opts.teamId
+    logMembership(leaf, opts.teamId)
+    tellAgents(before, `[Tessel] Team "${teamById(opts.teamId).name}": ${paneLabel(leaf)} joined the team.`, opts.teamId)
   }
   updateTask(task.id, { paneId: leaf.id })
   const t = boardTasks.find((x) => x.id === task.id)
@@ -2274,6 +2299,7 @@ async function startTask(spec) {
       : `${leaf.title} started "${task.title}".`,
     { timeout: 5000 }
   )
+  return { task: t, leaf }
 }
 
 // An agent printed the task signal: its card goes to Review.
@@ -2282,6 +2308,7 @@ function agentReportedDone(paneId) {
   if (!task) return
   const leaf = findLeaf(paneId)
   updateTask(task.id, { column: 'review', doneAt: Date.now() })
+  const lead = leaf && leaf.team ? teamLead(leaf.team) : null
   recordActivity({
     type: 'task',
     action: 'review',
@@ -2289,8 +2316,15 @@ function agentReportedDone(paneId) {
     title: task.title,
     paneId,
     agent: agentInfo(leaf),
-    wsId: task.wsId
+    wsId: task.wsId,
+    detail: lead && lead.id !== paneId ? `${lead.title} (lead) reviews it first` : ''
   })
+  if (lead && lead.id !== paneId) {
+    updateTask(task.id, { leadReview: 'pending', teamId: task.teamId || leaf.team })
+    deliverToAgent(lead.id, leadReviewPrompt(task, leaf), { source: 'tessel', scope: 'lead', teamId: leaf.team, waitIdle: true })
+    showToast(`${leaf.title} finished "${task.title}". ${lead.title} (lead) reviews it first.`, { timeout: 6000 })
+    return
+  }
   showToast(`${leaf ? leaf.title : 'An agent'} finished "${task.title}". It is ready for your review.`, {
     kind: 'attention',
     timeout: 10000,
@@ -2324,7 +2358,7 @@ function openReview(taskId) {
   if (boardTasks.some((t) => t.id === taskId)) reviewTaskId.value = taskId
 }
 
-function taskEvent(task, action, detail = '') {
+function taskEvent(task, action, detail = '', by = null) {
   const leaf = findLeaf(task.paneId)
   recordActivity({
     type: 'task',
@@ -2335,13 +2369,14 @@ function taskEvent(task, action, detail = '') {
     agent: leaf ? agentInfo(leaf) : { title: 'the agent' },
     wsId: task.wsId,
     branch: task.worktree ? task.worktree.branch : null,
-    detail
+    detail,
+    by
   })
 }
 
 // Back to the agent, with the task: the card returns to Doing until it
 // signals again.
-function sendBackToAgent(task, text, action, detail) {
+function sendBackToAgent(task, text, action, detail, by = null) {
   const leaf = findLeaf(task.paneId)
   if (!leaf) {
     showToast('The agent of this task was closed. Start a new task instead.', { kind: 'error' })
@@ -2353,10 +2388,10 @@ function sendBackToAgent(task, text, action, detail) {
     `[Tessel review] ${task.title}\n\n${text}\n\n` +
       (wt ? `Work in ${wt.path} on branch ${wt.branch}, commit the changes there (say which checks you ran in the commit message), and do not merge. ` : '') +
       'When it is done and checked, end your last message with a line that contains only the words TASK and COMPLETE joined by an underscore.',
-    { source: 'you', scope: 'task' }
+    by ? { source: 'lead', scope: 'task', from: by } : { source: 'you', scope: 'task' }
   )
-  updateTask(task.id, { column: 'doing' })
-  taskEvent(task, action, detail)
+  updateTask(task.id, { column: 'doing', leadReview: null })
+  taskEvent(task, action, detail, by)
   reviewTaskId.value = null
   showToast(`Sent to ${leaf.title}. "${task.title}" is back in Doing.`, { timeout: 5000 })
   return true
@@ -2477,6 +2512,191 @@ function wsAgents(wsId) {
 function agentLabel(l) {
   return `#${l.num || '?'} ${l.title}${l.agentId ? ` (${l.agentId})` : ''}`
 }
+
+// --- Team lead -------------------------------------------------------------------
+// A team may have one lead: an agent that splits the work, gives tasks to its
+// teammates (or starts new agents), and reviews what they finish before the
+// user merges it. It acts through JSON files in its own inbox folder
+// (src/main/leadInbox.js, src/shared/leadRequests.js); it cannot merge,
+// discard or close anything.
+const LEAD_MAX_ACTIVE = 6
+
+function teamLead(teamId) {
+  const team = teamById(teamId)
+  const leaf = team && team.leadId ? findLeaf(team.leadId) : null
+  return leaf && leaf.team === teamId ? leaf : null
+}
+
+function teamDir(teamId) {
+  const m = teamMembers(teamId)[0]
+  const ws = m && wsOfLeaf(m.id)
+  return (ws && ws.cwd) || null
+}
+
+function inboxPathFor(dir, token) {
+  const sep = dir.includes('\\') ? '\\' : '/'
+  return [dir.replace(/[\\/]+$/, ''), '.tessel', 'lead', token].join(sep)
+}
+
+function randomToken() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+// Make leafId the lead of its team, or (leafId null) leave the team without one.
+async function setTeamLead(teamId, leafId) {
+  closeMenus()
+  const team = teamById(teamId)
+  if (!team) return
+  const old = teamLead(teamId)
+  const dir = teamDir(teamId)
+  const leaf = leafId ? findLeaf(leafId) : null
+  if (leaf && old && old.id === leaf.id) return
+  if (leaf && (leaf.kind !== 'agent' || leaf.team !== teamId)) return
+  if (leaf && !dir) {
+    showToast('Set a project folder on this workspace first: the lead works from it.', { kind: 'error' })
+    return
+  }
+  if (team.leadToken && dir && window.shellApi.lead) window.shellApi.lead.remove({ dir, token: team.leadToken })
+  team.leadId = null
+  team.leadToken = null
+  if (old) tellAgents([old], `[Tessel] You no longer lead the team "${team.name}". Stop writing to your lead inbox.`, teamId)
+  if (!leaf) {
+    if (old) {
+      recordActivity({ type: 'team', action: 'lead-removed', teamId, wsId: teamWsId(teamId), name: team.name, detail: old.title })
+      tellAgents(teamMembers(teamId).filter((l) => l.id !== old.id), `[Tessel] Team "${team.name}": ${paneLabel(old)} no longer leads the team.`, teamId)
+    }
+    return
+  }
+  const token = randomToken()
+  const inbox = inboxPathFor(dir, token)
+  const mates = teamMembers(teamId).filter((l) => l.id !== leaf.id)
+  const guide = leadGuide({
+    teamName: team.name,
+    inbox,
+    members: mates.map(agentLabel),
+    kinds: taskAgentKinds.value.map((a) => a.id)
+  })
+  const res = await window.shellApi.lead.ensure({ dir, token, guide })
+  if (!res || !res.ok) {
+    showToast(`Could not make the lead's inbox: ${(res && res.error) || 'unknown error'}`, { kind: 'error' })
+    return
+  }
+  team.leadId = leaf.id
+  team.leadToken = token
+  recordActivity({ type: 'team', action: 'lead', teamId, wsId: teamWsId(teamId), name: team.name, detail: leaf.title })
+  tellAgents([leaf], `[Tessel] ${guide}`, teamId)
+  tellAgents(
+    mates,
+    `[Tessel] Team "${team.name}": ${paneLabel(leaf)} now leads the team. It may give you tasks; when you finish one, it reviews your work first.`,
+    teamId
+  )
+  showToast(`${leaf.title} now leads ${team.name}.`, { timeout: 4000 })
+}
+
+function leadReviewPrompt(task, worker) {
+  const wt = task.worktree
+  const where = wt
+    ? `in its own copy ${wt.path} (branch ${wt.branch}, from ${wt.baseBranch || 'main'}). See the changes with: git -C "${wt.path}" log ${wt.baseBranch || 'main'}..HEAD and git -C "${wt.path}" diff ${wt.baseBranch || 'main'}...HEAD`
+    : 'in the project folder (see git status and git diff there)'
+  return (
+    `[Tessel] ${paneLabel(worker)} finished the task "${task.title}" ${where}.\n` +
+    'Review it: correctness, scope, tests. Do not edit its files. Then write to your lead inbox either ' +
+    `{"action":"approve","task":"${task.title}","note":"..."} or {"action":"changes","task":"${task.title}","text":"what to fix"}.`
+  )
+}
+
+// Carry out one request from a lead; returns the line to answer it with.
+async function runLeadRequest(team, lead, req) {
+  const ws = wsOfLeaf(lead.id)
+  const member = (num) => teamMembers(team.id).find((l) => l.num === num && l.id !== lead.id) || null
+  if (req.action === 'task') {
+    const active = boardTasks.filter((t) => t.teamId === team.id && (t.column === 'doing' || t.column === 'review')).length
+    if (active >= LEAD_MAX_ACTIVE) return `Not started "${req.title}": the team already has ${active} tasks in progress (limit ${LEAD_MAX_ACTIVE}).`
+    let spec
+    if (req.num != null) {
+      const m = member(req.num)
+      if (!m) return `Not started "${req.title}": #${req.num} is not in your team.`
+      spec = { title: req.title, brief: req.brief, agent: { kind: 'pane', id: m.id }, isolated: false }
+    } else {
+      const kind = taskAgentKinds.value.find((a) => a.id === req.kind)
+      if (!kind) return `Not started "${req.title}": unknown agent kind "${req.kind}". Use one of: ${taskAgentKinds.value.map((a) => a.id).join(', ')}.`
+      if (req.ownCopy) await checkWorktree()
+      spec = { title: req.title, brief: req.brief, agent: { kind: 'new', id: kind.id }, isolated: req.ownCopy && worktreeState.available }
+    }
+    const res = await startTask(spec, { ws, nextTo: lead.id, teamId: team.id })
+    if (!res || res.error) return `Not started "${req.title}": ${(res && res.error) || 'unknown error'}.`
+    return `Started "${req.title}" with ${paneLabel(res.leaf)}${res.task.worktree ? ` on branch ${res.task.worktree.branch}` : ''}.`
+  }
+  if (req.action === 'message') {
+    const to = req.to === 'team' ? teamMembers(team.id).filter((l) => l.id !== lead.id) : [member(req.num)].filter(Boolean)
+    if (!to.length) return req.to === 'team' ? 'Nobody else is in your team yet.' : `#${req.num} is not in your team.`
+    for (const l of to) {
+      if (limits[l.id]) logMessage(l.id, 'skipped', req.text, { source: 'lead', scope: 'team', teamId: team.id })
+      else deliverToAgent(l.id, `[From your lead ${paneLabel(lead)}] ${req.text}`, { source: 'lead', scope: 'team', teamId: team.id, from: lead.title })
+    }
+    return `Message sent to ${to.map(paneLabel).join(', ')}.`
+  }
+  const inReview = boardTasks.filter((t) => t.teamId === team.id && t.column === 'review')
+  const task = findTaskByTitle(inReview, req.task)
+  if (!task) {
+    return `No task of your team waits for review under "${req.task}".` + (inReview.length ? ` In review: ${inReview.map((t) => `"${t.title}"`).join(', ')}.` : '')
+  }
+  if (req.action === 'approve') {
+    updateTask(task.id, { leadReview: 'approved', leadNote: req.text || '' })
+    taskEvent(task, 'approved', req.text, lead.title)
+    showToast(`${lead.title} (lead) approved "${task.title}". It is ready for you to merge.`, {
+      kind: 'attention',
+      timeout: 10000,
+      action: task.worktree ? { label: 'Review', run: () => openReview(task.id) } : { label: 'Show', run: () => focusPane(task.paneId) }
+    })
+    return `Approved "${task.title}". The user was told it is ready to merge.`
+  }
+  const ok = sendBackToAgent(task, `Your lead ${paneLabel(lead)} asks for changes:\n${req.text}`, 'changes', req.text.slice(0, 80), lead.title)
+  return ok ? `Sent your changes for "${task.title}" back to its agent.` : `The agent of "${task.title}" was closed.`
+}
+
+// Every few seconds: take each lead's requests and answer them in one message.
+let leadPolling = false
+async function pollLeads() {
+  if (leadPolling || !window.shellApi.lead) return
+  leadPolling = true
+  try {
+    for (const team of [...teams.value]) {
+      if (!team.leadId) continue
+      const lead = teamLead(team.id)
+      const dir = teamDir(team.id)
+      if (!lead) {
+        // The lead was closed or left the team.
+        if (dir && team.leadToken) window.shellApi.lead.remove({ dir, token: team.leadToken })
+        const name = team.name
+        team.leadId = null
+        team.leadToken = null
+        recordActivity({ type: 'team', action: 'lead-removed', teamId: team.id, wsId: teamWsId(team.id), name })
+        tellTeam(team.id, 'The team has no lead any more.')
+        continue
+      }
+      if (!dir || !team.leadToken) continue
+      const res = await window.shellApi.lead.take({ dir, token: team.leadToken })
+      if (!res || !res.ok || !res.items.length) continue
+      const answers = []
+      for (const item of res.items) {
+        const req = item.error ? { ok: false, error: item.error } : parseLeadRequest(item.data)
+        if (!req.ok) answers.push(`${item.file}: not done, ${req.error}.`)
+        else answers.push(await runLeadRequest(team, lead, req))
+      }
+      deliverToAgent(lead.id, answers.map((a) => `[Tessel] ${a}`).join('\n'), {
+        source: 'tessel',
+        scope: 'lead',
+        teamId: team.id,
+        waitIdle: true
+      })
+    }
+  } finally {
+    leadPolling = false
+  }
+}
+const leadTimer = setInterval(pollLeads, 2500)
+onBeforeUnmount(() => clearInterval(leadTimer))
 
 // --- Teams ----------------------------------------------------------------------
 function isTeam(t) {
@@ -2916,8 +3136,10 @@ const sessionItems = computed(() => {
       reset: limits[leaf.id] ? limits[leaf.id].reset : '',
       held: !!pendingMessages[leaf.id],
       team: leaf.team || null,
+      lead: !!(leaf.team && teamById(leaf.team)?.leadId === leaf.id),
       task: taskOfPane(leaf.id)?.title || null,
       review: taskOfPane(leaf.id)?.column === 'review',
+      leadReview: taskOfPane(leaf.id)?.leadReview || null,
       active: leaf.id === activeId.value
     })
   })
@@ -3524,6 +3746,7 @@ onBeforeUnmount(() => {
         @add-to-team="addToTeam"
         @rename-team="renameTeam"
         @disband-team="disbandTeam"
+        @set-lead="setTeamLead"
         @message-team="messageTeam"
         @activity="openActivity"
         @focus-pane="focusPane"

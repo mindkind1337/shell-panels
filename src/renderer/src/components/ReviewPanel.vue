@@ -103,6 +103,9 @@ const checks = computed(() => {
   if (!i) return [{ kind: 'wait', text: 'Checking the branch…' }]
   if (!i.ok) return [{ kind: 'bad', text: i.error }]
   const out = []
+  if (props.task.leadReview === 'approved')
+    out.push({ kind: 'ok', text: `Approved by the team lead${props.task.leadNote ? `: ${props.task.leadNote}` : '.'}` })
+  else if (props.task.leadReview === 'pending') out.push({ kind: 'info', text: 'The team lead has not reviewed it yet.' })
   if (i.uncommitted.length)
     out.push({
       kind: 'bad',

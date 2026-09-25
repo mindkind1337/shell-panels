@@ -159,9 +159,11 @@ function taskLine(x) {
   const t = `“${x.task}”`
   switch (x.action) {
     case 'review':
-      return { who: x.title, text: `finished the task ${t}`, note: 'ready for your review' }
+      return { who: x.title, text: `finished the task ${t}`, note: x.detail || 'ready for your review' }
+    case 'approved':
+      return { who: `${x.by || 'The lead'} (lead)`, text: `approved ${t}`, note: x.detail }
     case 'changes':
-      return { who: 'You', text: `asked ${x.title} for changes to ${t}`, note: x.detail }
+      return { who: x.by ? `${x.by} (lead)` : 'You', text: `asked ${x.title} for changes to ${t}`, note: x.detail }
     case 'resolve':
       return { who: 'You', text: `asked ${x.title} to resolve the conflicts of ${t}`, note: x.detail }
     case 'merged':
@@ -178,7 +180,7 @@ function taskLine(x) {
 function describe(x) {
   switch (x.kind) {
     case 'message': {
-      const who = x.source === 'tessel' ? 'Tessel' : 'You'
+      const who = x.source === 'tessel' ? 'Tessel' : x.source === 'lead' ? `${x.from || 'The lead'} (lead)` : 'You'
       const to = x.scope === 'team' ? ' (team)' : x.scope === 'workspace' ? ' (all agents)' : ''
       const how =
         x.status === 'held'
@@ -205,7 +207,9 @@ function describe(x) {
         renamed: `renamed team “${x.detail}” to “${x.name}”`,
         left: `${x.detail} left “${x.name}”`,
         closed: `${x.detail} was closed and left “${x.name}”`,
-        ungrouped: `ungrouped team “${x.name}”`
+        ungrouped: `ungrouped team “${x.name}”`,
+        lead: `${x.detail} now leads “${x.name}”`,
+        'lead-removed': `“${x.name}” has no lead any more`
       }[x.action]
       return { who: 'Team', text: what || x.action, note: '' }
     }

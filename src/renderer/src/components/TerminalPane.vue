@@ -126,6 +126,8 @@ const task = computed(() => (ctx.taskOfPane ? ctx.taskOfPane(props.node.id) : nu
 
 // The team this pane is in (a named, coloured group of agents), if any.
 // (Checked: in the dev build this file can reload before App.vue provides it.)
+// This pane leads its team.
+const isLead = computed(() => !!(team.value && team.value.leadId === props.node.id))
 const team = computed(() => (ctx.teamById ? ctx.teamById(props.node.team) : null))
 const paneStyle = computed(() => {
   const style = {}
@@ -969,8 +971,8 @@ onBeforeUnmount(() => {
         <span
           v-if="team"
           class="pane-team"
-          :title="`Team: ${team.name} (manage it under Sessions)`"
-          >{{ team.name }}</span
+          :title="`Team: ${team.name}${isLead ? ' (this agent leads it)' : ''} (manage it under Sessions)`"
+          >{{ team.name }}{{ isLead ? ' · lead' : '' }}</span
         >
         <span
           v-if="isAgent && asksApproval"
@@ -1335,6 +1337,13 @@ onBeforeUnmount(() => {
         <div class="ctx-menu-sep"></div>
       </template>
       <template v-if="team">
+        <button
+          v-if="isAgent && ctx.setTeamLead"
+          class="ctx-menu-item"
+          @click="closeCtxMenu(), ctx.setTeamLead(team.id, isLead ? null : node.id)"
+        >
+          {{ isLead ? `Stop leading ${team.name}` : `Make lead of ${team.name}` }}
+        </button>
         <button class="ctx-menu-item" @click="closeCtxMenu(), ctx.leaveTeam(node.id)">
           Leave {{ team.name }}
         </button>

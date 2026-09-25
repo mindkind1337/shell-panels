@@ -28,6 +28,7 @@ const emit = defineEmits([
   'add-to-team',
   'rename-team',
   'disband-team',
+  'set-lead',
   'message-team',
   'activity',
   'folder',
@@ -146,6 +147,8 @@ const STATE_TEXT = {
 
 function stateText(m) {
   if (m.kind && m.kind !== 'agent') return 'Terminal'
+  if (m.review && m.leadReview === 'pending') return `Lead reviewing: ${m.task}`
+  if (m.review && m.leadReview === 'approved') return `Approved by lead: ${m.task}`
   if (m.review) return `Ready for review: ${m.task}`
   if (m.held) return 'Message waits for your approval'
   if (m.state === 'limited' && m.reset) return `Usage limit · ${m.reset}`
@@ -218,6 +221,11 @@ function cancelPicking() {
 
 function canPick(x) {
   return x.kind === 'agent' && !x.team
+}
+
+// The agents of a team (in this workspace), for its menu.
+function teamAgents(id) {
+  return props.sessions.filter((s) => s.kind === 'agent' && s.team === id)
 }
 
 function teamName(id) {
@@ -614,7 +622,9 @@ defineExpose({
             :size="14"
           />
           <span class="ws-session-body">
-            <span class="ws-session-name">{{ r.s.title }}</span>
+            <span class="ws-session-name"
+              >{{ r.s.title }}<span v-if="r.s.lead" class="ws-lead-tag" title="Leads the team">lead</span></span
+            >
             <span class="ws-session-state">{{
               picking && r.s.kind === 'agent' && r.s.team ? `In ${teamName(r.s.team)}` : stateText(r.s)
             }}</span>
@@ -701,6 +711,26 @@ defineExpose({
             @click="pick((t) => emit('activity', 'team:' + t.id))"
           >
             Activity
+          </button>
+          <div class="ctx-menu-sep"></div>
+          <template v-for="m in teamAgents(menu.team.id)" :key="m.id">
+            <button
+              v-if="!m.lead"
+              class="ctx-menu-item"
+              role="menuitem"
+              title="The lead gives tasks to the team and reviews them before you merge"
+              @click="pick((t) => emit('set-lead', t.id, m.id))"
+            >
+              Make #{{ m.num }} {{ m.title }} lead
+            </button>
+          </template>
+          <button
+            v-if="teamAgents(menu.team.id).some((m) => m.lead)"
+            class="ctx-menu-item"
+            role="menuitem"
+            @click="pick((t) => emit('set-lead', t.id, null))"
+          >
+            No lead
           </button>
           <div class="ctx-menu-sep"></div>
           <button class="ctx-menu-item" role="menuitem" @click="pick((t) => startTeamRename(t))">

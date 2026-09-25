@@ -213,6 +213,7 @@ export function summarize(events, opts = {}) {
           agentId: r.agentId,
           status: e.status,
           source: e.source || 'you',
+          from: e.from || '',
           scope: e.scope || 'workspace',
           preview: e.preview || '',
           text: e.text || e.preview || ''
@@ -238,7 +239,8 @@ export function summarize(events, opts = {}) {
         title: e.agent ? e.agent.title : 'Agent',
         task: e.title || '',
         branch: e.branch || '',
-        detail: e.detail || ''
+        detail: e.detail || '',
+        by: e.by || ''
       })
       continue
     }

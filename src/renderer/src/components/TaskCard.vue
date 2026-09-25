@@ -115,6 +115,14 @@ function paneLabel(pane) {
         <BrandIcon :kind="assignedPane.agentId || ''" :size="13" />{{ paneLabel(assignedPane) }}
       </span>
       <span v-else class="task-assignee unassigned" data-test="assignee">Unassigned</span>
+      <span
+        v-if="task.column === 'review' && task.leadReview"
+        class="task-lead"
+        :class="task.leadReview"
+        data-test="lead-review"
+        :title="task.leadNote || ''"
+        >{{ task.leadReview === 'approved' ? 'Lead approved' : 'Lead reviewing' }}</span
+      >
     </div>
 
     <div v-if="task.worktree || task.brief" class="task-card-extra">
