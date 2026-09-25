@@ -867,6 +867,27 @@ ipcMain.on('app:notify', (_evt, { title, body, paneId } = {}) => {
   setTimeout(ensureDevShortcut, 3000)
 })
 ipcMain.handle('agents:list', (_evt, custom) => getAgents(custom))
+
+// Codex 0.157+ runs its tools through a shared background server (daemon) by
+// default. In Tessel that breaks the team tools: the daemon does not get each
+// pane's TESSEL_PANE_ID, and it closes stdio MCP servers right after a session
+// starts ("Transport closed"). Codex started by Tessel runs without it
+// (--no-daemon), when the installed Codex knows that option. Checked once.
+let codexNoDaemon = null
+function codexSupportsNoDaemon() {
+  if (!codexNoDaemon) {
+    codexNoDaemon = new Promise((resolve) => {
+      execFile(
+        process.platform === 'win32' ? 'cmd.exe' : 'codex',
+        process.platform === 'win32' ? ['/d', '/s', '/c', 'codex --help'] : ['--help'],
+        { windowsHide: true, timeout: 20000, env: freshEnv() },
+        (_err, stdout) => resolve(/--no-daemon\b/.test(String(stdout || '')))
+      )
+    })
+  }
+  return codexNoDaemon
+}
+ipcMain.handle('agents:codex-no-daemon', () => codexSupportsNoDaemon())
 // Which of these commands are on PATH (fresh PATH, so just-installed tools
 // show up). Returns { bin: true|false }.
 ipcMain.handle('tools:check', (_evt, bins) => {

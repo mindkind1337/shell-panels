@@ -355,8 +355,12 @@ async function agentStartLine(agent, sessionId, resume) {
     const id = sessionId || newUuid()
     return { line: `${agent.command} --session-id ${id}`, sessionId: id, resumed: false }
   }
-  if (kind === 'codex' && sessionId && resume) {
-    return { line: `${agent.command} resume ${sessionId}`, sessionId, resumed: true }
+  if (kind === 'codex') {
+    // Without Codex's shared daemon: with it, the team tools lose the pane's
+    // identity and are closed after start (see codexSupportsNoDaemon).
+    const own = window.shellApi.codexNoDaemon && (await window.shellApi.codexNoDaemon().catch(() => false)) ? ' --no-daemon' : ''
+    if (sessionId && resume) return { line: `${agent.command} resume ${sessionId}${own}`, sessionId, resumed: true }
+    return { line: `${agent.command}${own}`, sessionId: null, resumed: false }
   }
   return { line: agent.command, sessionId: null, resumed: false }
 }
