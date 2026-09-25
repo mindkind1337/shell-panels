@@ -171,6 +171,16 @@ let lastRows = 0
 // so panes still refit while the window is unfocused or occluded.
 const RESIZE_SETTLE_MS = 90
 let fitTimer = 0
+// A pane that was at the latest output stays there through a resize (a
+// sidebar opening, a split) and the redraw the program sends right after it:
+// the reflow would otherwise leave it scrolled up with "New output" shown.
+const KEEP_BOTTOM_MS = 1500
+let keepBottomUntil = 0
+
+function atBottom() {
+  const buf = term.buffer.active
+  return buf.viewportY >= buf.baseY
+}
 
 function doFit() {
   if (!term || !fit) return
@@ -179,7 +189,14 @@ function doFit() {
     if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return
     // Never shrink to nothing (e.g. while the pane is momentarily unmeasurable).
     if (dims.cols < 2 || dims.rows < 1) return
-    if (dims.cols !== term.cols || dims.rows !== term.rows) term.resize(dims.cols, dims.rows)
+    if (dims.cols !== term.cols || dims.rows !== term.rows) {
+      const wasAtBottom = atBottom() || Date.now() < keepBottomUntil
+      term.resize(dims.cols, dims.rows)
+      if (wasAtBottom) {
+        keepBottomUntil = Date.now() + KEEP_BOTTOM_MS
+        term.scrollToBottom()
+      }
+    }
     notifyPtySize()
   } catch {
     /* element not measurable yet */
@@ -669,7 +686,9 @@ onMounted(() => {
   term.onWriteParsed(() => {
     if (!term) return
     const buf = term.buffer.active
-    if (buf.viewportY < buf.baseY) newBelow.value = true
+    // Just resized from the bottom: the redraw keeps it at the bottom.
+    if (buf.viewportY < buf.baseY && Date.now() < keepBottomUntil) term.scrollToBottom()
+    else if (buf.viewportY < buf.baseY) newBelow.value = true
     updateScrolled()
   })
 
@@ -690,6 +709,8 @@ onMounted(() => {
     findResult.count = resultCount
   })
   term.open(hostEl.value)
+  // Scrolling by hand ends "stay at the bottom" at once.
+  hostEl.value.addEventListener('wheel', () => (keepBottomUntil = 0), { passive: true, capture: true })
   // Draw with the graphics card (much faster with busy agents and many
   // panes), like VS Code. Falls back to the normal renderer if WebGL is
   // unavailable or the graphics context is lost.
