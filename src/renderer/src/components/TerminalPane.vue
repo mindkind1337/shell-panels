@@ -984,6 +984,14 @@ onBeforeUnmount(() => {
           :title="`Team: ${team.name}${isLead ? ' (this agent leads it)' : ''} (manage it under Sessions)`"
           >{{ team.name }}{{ isLead ? ' · lead' : '' }}</span
         >
+        <button
+          v-if="isAgent && ctx.unsent && ctx.unsent[node.id]"
+          class="pane-unsent"
+          title="A message was pasted but not seen taken: click to say what happened"
+          @click.stop="ctx.resolveUnsent(node.id)"
+        >
+          message not confirmed
+        </button>
         <span
           v-if="isAgent && track && (track.level === 'warn' || track.level === 'alert') && !asksApproval && !limit"
           class="pane-stuck"

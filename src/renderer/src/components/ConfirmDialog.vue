@@ -7,6 +7,8 @@ defineProps({
   title: { type: String, required: true },
   text: { type: String, default: '' },
   confirmLabel: { type: String, default: 'OK' },
+  // Optional second choice (answers 'alt'); Cancel still means "not now".
+  altLabel: { type: String, default: '' },
   danger: { type: Boolean, default: false }
 })
 const emit = defineEmits(['answer'])
@@ -29,6 +31,7 @@ onMounted(() => okEl.value && okEl.value.focus())
       <p v-if="text" id="confirm-text" class="confirm-text">{{ text }}</p>
       <div class="confirm-actions">
         <button class="confirm-btn" @click="emit('answer', false)">Cancel</button>
+        <button v-if="altLabel" class="confirm-btn" @click="emit('answer', 'alt')">{{ altLabel }}</button>
         <button
           ref="okEl"
           class="confirm-btn primary"

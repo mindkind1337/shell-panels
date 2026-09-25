@@ -50,7 +50,7 @@ async function watchAfterEnter(id, text, d) {
       if (quietFor >= d.cfg.quietMs) return draftVisible(pane, text) ? 'draft' : 'unknown'
     }
   }
-  return d.isBusy(id) ? 'accepted' : 'unknown'
+  return busyFor >= d.cfg.acceptBusyMs ? 'accepted' : 'unknown'
 }
 
 export async function pasteAndConfirm(id, text, deps) {

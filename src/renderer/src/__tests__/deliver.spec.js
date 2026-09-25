@@ -91,6 +91,16 @@ describe('pasteAndConfirm', () => {
     expect(state.pastes).toBe(0)
   })
 
+  it('at the time limit, a last busy sample alone does not count as taken', async () => {
+    const { deps } = harness((s) => {
+      s.screen = 'nothing'
+      // Busy in short bursts that never last 4 s.
+      s.busy = s.t % 3000 === 0
+    })
+    const r = await pasteAndConfirm('p', MSG, { ...deps, cfg: { quietMs: 60000 } })
+    expect(r).toBe('unconfirmed')
+  })
+
   it('the pane closes: failed', async () => {
     const { deps } = harness((s) => {
       s.gone = s.t > 1000

@@ -149,7 +149,7 @@ function askConfirm(opts) {
 function answerConfirm(ok) {
   const c = confirmState.value
   confirmState.value = null
-  if (c) c.resolve(!!ok)
+  if (c) c.resolve(ok === 'alt' ? 'alt' : !!ok)
 }
 provide('askConfirm', askConfirm)
 const currentWs = computed(() => workspaces.value.find((w) => w.id === currentWsId.value) || null)
@@ -158,6 +158,9 @@ const currentWs = computed(() => workspaces.value.find((w) => w.id === currentWs
 // keeps its team id (leaf.team); saved with the layout.
 const TEAM_COLORS = ['#e0a526', '#3fb6a8', '#c77dd6', '#5b9df5', '#e2724f', '#8fbf4f']
 const teams = ref([]) // [{ id, name, color }]
+// Panes whose last message was pasted but not seen taken: leafId -> { item }.
+// Nothing else is pasted there until the user resolves it.
+const unsent = reactive({})
 
 
 // `tree` and `activeId` always point at the current workspace, so the pane
@@ -893,6 +896,8 @@ provide('panelCtx', {
   teamLead,
   taskOfPane,
   trackOf,
+  unsent,
+  resolveUnsent,
   agentReportedDone,
   copied: (what) => showToast(`${what} copied.`, { timeout: 2000 })
 })
@@ -2164,6 +2169,35 @@ function awaitingApproval(leafId) {
 const pendingMessages = reactive({})
 // Panes a message is being pasted into and confirmed right now.
 const delivering = new Set()
+
+// Ask the user what happened to an unconfirmed message, then go on.
+async function resolveUnsent(id) {
+  const u = unsent[id]
+  if (!u) return
+  focusPane(id)
+  const leaf = findLeaf(id)
+  const who = leaf ? leaf.title : 'the agent'
+  const answer = await askConfirm({
+    title: `Did ${who} get the message?`,
+    text:
+      `Tessel pasted a message and pressed Enter, but ${who} did not visibly take it: "${u.item.text.slice(0, 160)}${u.item.text.length > 160 ? '…' : ''}". ` +
+      'Look at its input box. If the message is still there, press Enter in the terminal yourself, then choose "It was sent". ' +
+      'If it is gone and was not received, choose "Send again".',
+    confirmLabel: 'It was sent',
+    altLabel: 'Send again'
+  })
+  if (!unsent[id] || unsent[id] !== u) return
+  if (answer === true) {
+    delete unsent[id]
+    if (u.item.held) logMessage(id, 'delivered', u.item.text, u.item.meta)
+    if (u.item.meta && u.item.meta.onDelivered) u.item.meta.onDelivered()
+  } else if (answer === 'alt') {
+    delete unsent[id]
+    if (u.item.meta && u.item.meta.onRetry) u.item.meta.onRetry()
+    requeueDelivery(id, u.item)
+  } else return
+  flushPending()
+}
 let pendingTimer = null
 
 // meta: { source: 'you' | 'tessel', scope: 'team' | 'workspace' | 'notes' |
@@ -2228,6 +2262,10 @@ function flushPending() {
     if (!pane || !findLeaf(id)) {
       for (const item of pendingMessages[id]) failDelivery(item)
       delete pendingMessages[id]
+      if (unsent[id]) {
+        failDelivery(unsent[id].item)
+        delete unsent[id]
+      }
       continue
     }
     if (awaitingApproval(id)) {
@@ -2247,7 +2285,7 @@ function flushPending() {
     // One message per pane at a time: it is pasted, Enter is pressed, and
     // Tessel watches the agent take it (src/renderer/src/deliver.js) before
     // the next one goes.
-    if (delivering.has(id)) {
+    if (delivering.has(id) || unsent[id]) {
       waiting = true
       continue
     }
@@ -2271,13 +2309,16 @@ function flushPending() {
           requeueDelivery(id, item)
         } else if (result === 'unconfirmed') {
           // Pasted, but the agent did not visibly take it: not acknowledged,
-          // and not pasted again blindly. The user can check.
+          // not pasted again blindly, and nothing else goes to this pane (it
+          // would land on the draft) until the user says what happened.
           logMessage(id, 'unconfirmed', item.text, item.meta)
+          unsent[id] = { item, at: Date.now() }
+          if (item.meta && item.meta.onUncertain) item.meta.onUncertain()
           const leaf = findLeaf(id)
-          showToast(`A message to ${leaf ? leaf.title : 'an agent'} may not have been sent: check its input box.`, {
+          showToast(`A message to ${leaf ? leaf.title : 'an agent'} may not have been sent. Check its input box.`, {
             kind: 'attention',
-            timeout: 10000,
-            action: { label: 'Show', run: () => focusPane(id) }
+            timeout: 15000,
+            action: { label: 'Check', run: () => resolveUnsent(id) }
           })
         } else {
           failDelivery(item)
@@ -4336,6 +4377,7 @@ onBeforeUnmount(() => {
       :title="confirmState.title"
       :text="confirmState.text || ''"
       :confirm-label="confirmState.confirmLabel || 'OK'"
+      :alt-label="confirmState.altLabel || ''"
       :danger="!!confirmState.danger"
       @answer="answerConfirm"
     />
