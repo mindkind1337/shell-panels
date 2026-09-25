@@ -242,3 +242,35 @@ describe('setting up the team tools', () => {
     expect(cmds.filter((c) => c.includes('tessel-team-mcp.cjs'))).toEqual([`node "${script}" --hook`])
   })
 })
+
+describe('two Tessel windows in one project', () => {
+  let dir
+  beforeEach(() => {
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-two-'))
+  })
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+  const current = () => JSON.parse(fs.readFileSync(join(dir, '.tessel', 'team-channel', 'current.json'), 'utf8'))
+
+  it('each writes its own panes and keeps the other window’s', () => {
+    writeCurrentTeams({ dir, owner: 'dev', panes: { 'pane-1-aaaaaa': { team: 'team-1', num: 1 } } })
+    writeCurrentTeams({ dir, owner: 'app', panes: { 'pane-9-zzzzzz': { team: 'team-9', num: 2 } } })
+    writeCurrentTeams({ dir, owner: 'dev', panes: {} })
+    const c = current()
+    expect(Object.keys(c.panes)).toEqual(['pane-9-zzzzzz'])
+    expect(c.panes['pane-9-zzzzzz']).toEqual({ team: 'team-9', num: 2, owner: 'app' })
+  })
+
+  it('does not retire a team the other window still has', () => {
+    const A = { id: 'pane-9-zzzzzz', num: 2, title: 'Codex CLI' }
+    expect(ensureTeamChannel({ dir, teamId: 'team-9', members: [A] }).ok).toBe(true)
+    writeCurrentTeams({ dir, owner: 'app', panes: { [A.id]: { team: 'team-9', num: 2 } } })
+    expect(retireOldTeams({ dir, liveTeamIds: [], owner: 'dev' }).retired).toEqual([])
+    // Gone for more than 5 minutes: its team is old now.
+    const c = current()
+    c.owners.app -= 6 * 60 * 1000
+    fs.writeFileSync(join(dir, '.tessel', 'team-channel', 'current.json'), JSON.stringify(c))
+    expect(retireOldTeams({ dir, liveTeamIds: [], owner: 'dev' }).retired).toEqual(['team-9'])
+  })
+})

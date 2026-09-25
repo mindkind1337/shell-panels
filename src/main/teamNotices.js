@@ -29,8 +29,30 @@ function readJson(file) {
   }
 }
 
-// panes: { <paneId>: { team, num } } for the teams of this project now.
-export function writeCurrentTeams({ dir, panes } = {}) {
+// Two Tessel windows (say the installed app and the dev build) can have teams
+// in the same project. Each writes only its own panes (tagged with its
+// `owner`) and keeps the other's, as long as that one wrote in the last 5
+// minutes (`owners`: owner -> last write); an owner not seen for longer is
+// gone and its panes are dropped.
+const OWNER_GONE_MS = 5 * 60 * 1000
+const OWNER_TOUCH_MS = 60 * 1000
+
+// Pane entries of the other, still running, Tessel windows.
+function otherPanes(current, owner, now = Date.now()) {
+  const out = {}
+  if (!owner || !current || !current.panes) return out
+  const owners = current.owners || {}
+  for (const [id, p] of Object.entries(current.panes)) {
+    if (!p || !p.owner || p.owner === owner) continue
+    if (!(now - (owners[p.owner] || 0) <= OWNER_GONE_MS)) continue
+    out[id] = p
+  }
+  return out
+}
+
+// panes: { <paneId>: { team, num } } for the teams of this project now;
+// owner: this Tessel window (set by the main process).
+export function writeCurrentTeams({ dir, panes, owner } = {}) {
   const b = base(dir)
   if (!b || !panes || typeof panes !== 'object') return { ok: false, error: 'Invalid team location.' }
   const clean = {}
@@ -42,20 +64,33 @@ export function writeCurrentTeams({ dir, panes } = {}) {
   fs.mkdirSync(b, { recursive: true })
   const file = join(b, 'current.json')
   const old = readJson(file)
-  if (old && JSON.stringify(old.panes) === JSON.stringify(clean)) return { ok: true, changed: false }
-  writeAtomic(file, { version: 1, panes: clean })
-  return { ok: true, changed: true }
+  const now = Date.now()
+  const merged = otherPanes(old, owner, now)
+  for (const [id, p] of Object.entries(clean)) merged[id] = owner ? { ...p, owner } : p
+  const owners = {}
+  for (const [o, at] of Object.entries((old && old.owners) || {})) {
+    if (typeof at === 'number' && now - at <= OWNER_GONE_MS) owners[o] = at
+  }
+  const same = old && JSON.stringify(old.panes) === JSON.stringify(merged)
+  // Unchanged: rewritten only now and then, to show this window still runs.
+  if (same && (!owner || now - (owners[owner] || 0) < OWNER_TOUCH_MS)) return { ok: true, changed: false }
+  if (owner) owners[owner] = now
+  writeAtomic(file, owner ? { version: 1, panes: merged, owners } : { version: 1, panes: merged })
+  return { ok: true, changed: !same }
 }
 
 // Teams of this project that do not exist any more: their members are made
 // inactive, so nothing is read or sent there again.
-export function retireOldTeams({ dir, liveTeamIds } = {}) {
+// Teams another running Tessel window has here are not old.
+export function retireOldTeams({ dir, liveTeamIds, owner } = {}) {
   const b = base(dir)
   if (!b || !Array.isArray(liveTeamIds)) return { ok: false, error: 'Invalid team location.' }
   if (!fs.existsSync(b)) return { ok: true, retired: [] }
+  const live = new Set(liveTeamIds)
+  for (const p of Object.values(otherPanes(readJson(join(b, 'current.json')), owner))) live.add(p.team)
   const retired = []
   for (const t of fs.readdirSync(b)) {
-    if (!ID_RE.test(t) || liveTeamIds.includes(t) || !fs.existsSync(join(b, t, 'state.json'))) continue
+    if (!ID_RE.test(t) || live.has(t) || !fs.existsSync(join(b, t, 'state.json'))) continue
     const state = readJson(join(b, t, 'state.json'))
     if (!state || !state.members || !Object.values(state.members).some((m) => m.active)) continue
     const res = ensureTeamChannel({ dir, teamId: t, members: [] })

@@ -738,8 +738,11 @@ ipcMain.handle('channel:hold', safe(holdTeamDelivery))
 ipcMain.handle('channel:release', safe(releaseTeamDelivery))
 ipcMain.handle('channel:acks', safe(takeTeamAcks))
 ipcMain.handle('team:notice', safe(addNotices))
-ipcMain.handle('team:current', safe(writeCurrentTeams))
-ipcMain.handle('team:retire', safe(retireOldTeams))
+// This window, among Tessel windows sharing a project's team folder: its
+// data folder (the dev build and the installed app have different ones).
+const TEAM_OWNER = crypto.createHash('sha1').update(app.getPath('userData').toLowerCase()).digest('hex').slice(0, 12)
+ipcMain.handle('team:current', safe((args) => writeCurrentTeams({ ...args, owner: TEAM_OWNER })))
+ipcMain.handle('team:retire', safe((args) => retireOldTeams({ ...args, owner: TEAM_OWNER })))
 
 // A Codex config.toml Tessel is about to write, checked by Codex itself in a
 // throwaway CODEX_HOME. -> { ok, error }
