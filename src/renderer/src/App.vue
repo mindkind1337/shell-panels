@@ -182,7 +182,7 @@ function noteUserInput(id, data) {
   // activity in that pane.
   if (/^\x1b(?:\[|O)[AB]$|^\x1b\[3~$/.test(s)) {
     lastUserKey[id] = Date.now()
-    if (!userDraft[id]) draftUnknown[id] = true
+    if (!userDraft[id]) setDraftUnknown(id)
     return
   }
   if (/^\x1b(?:\[|O)[CDHF]$|^\x1b\[[1-8]~$/.test(s)) {
@@ -223,6 +223,20 @@ function setDraft(id, on) {
     localStorage.setItem(DRAFTS_KEY, JSON.stringify(all))
   } catch {
     // storage unavailable: the pane counts as unknown after a reload
+  }
+}
+// The line may hold something again (history recalled, text deleted):
+// unknown, also after a reload (the record is removed at once, before the
+// key reaches the terminal).
+function setDraftUnknown(id) {
+  draftUnknown[id] = true
+  const all = readDrafts()
+  if (!(id in all)) return
+  delete all[id]
+  try {
+    localStorage.setItem(DRAFTS_KEY, JSON.stringify(all))
+  } catch {
+    // storage unavailable: unknown after a reload anyway
   }
 }
 function userIsTyping(id) {
@@ -3375,7 +3389,7 @@ function wakeAllowed(id) {
   // user's next key is tracked again by noteUserInput).
   if (draftUnknown[id]) {
     if (!inputShownEmpty(id)) return false
-    delete draftUnknown[id]
+    setDraft(id, false) // proven empty: recorded as known empty
   }
   return Date.now() - (lastUserKey[id] || 0) >= USER_AWAY_MS
 }
