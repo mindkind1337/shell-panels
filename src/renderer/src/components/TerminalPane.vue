@@ -24,6 +24,7 @@ import {
   setApproval,
   approvals
 } from '../agentStatus'
+import { promptShowsPlaceholder } from '../promptCheck'
 import { detectLimit, detectApproval, detectTaskDone } from '../agentLimit'
 
 const props = defineProps({
@@ -828,7 +829,9 @@ onMounted(() => {
     paste: pasteText,
     submit: () => window.shellApi.writePty(props.node.id, '\r'),
     getSelection: () => (term ? term.getSelection() : ''),
-    screenText
+    screenText,
+    // Is its input prompt empty (see promptCheck.js)?
+    promptShowsPlaceholder: (promptChar) => promptShowsPlaceholder(term, promptChar)
   }
   registerPane(props.node.id, paneApi)
 

@@ -176,8 +176,21 @@ function noteUserInput(id, data) {
   // Terminal replies and arrow keys (ESC [ ..., ESC O ...) are not typing;
   // a paste the user makes (ESC [200~ ... ESC [201~) is.
   const pasted = s.startsWith('\x1b[200~')
-  // Other escape sequences (arrows, focus, colour and device replies the
-  // terminal sends by itself) are not typing; Esc alone is (it clears).
+  // Keys the user presses that edit the line without typing: Up/Down recall
+  // an older entry into it, Delete removes text, so its state is unknown
+  // again (the screen can prove it empty later); other navigation keys are
+  // activity in that pane.
+  if (/^\x1b(?:\[|O)[AB]$|^\x1b\[3~$/.test(s)) {
+    lastUserKey[id] = Date.now()
+    if (!userDraft[id]) draftUnknown[id] = true
+    return
+  }
+  if (/^\x1b(?:\[|O)[CDHF]$|^\x1b\[[1-8]~$/.test(s)) {
+    lastUserKey[id] = Date.now()
+    return
+  }
+  // Other escape sequences (focus, colour and device replies the terminal
+  // sends by itself) are not typing; Esc alone is (it clears).
   if (s.length > 1 && s.startsWith('\x1b') && !pasted) return
   if (pasted) {
     lastUserKey[id] = Date.now()
@@ -3373,17 +3386,11 @@ function wakeAllowed(id) {
 function inputShownEmpty(id) {
   const leaf = findLeaf(id)
   const pane = getPane(id)
-  if (!leaf || leaf.agentId !== 'codex' || !pane || !pane.screenText) return false
-  // It must be THE input line: the last "›" line on screen, with at most
-  // Codex's status line after it.
-  const lines = pane
-    .screenText(6)
-    .split(/\r?\n/)
-    .filter((l) => l.trim())
-  let last = -1
-  for (let i = 0; i < lines.length; i++) if (/^\s*›/.test(lines[i])) last = i
-  if (last === -1 || lines.length - 1 - last > 1) return false
-  return /^\s*›\s+Ask Codex to do anything\s*$/.test(lines[last])
+  if (!leaf || leaf.agentId !== 'codex' || !pane || !pane.promptShowsPlaceholder) return false
+  // Read from the terminal itself, not from text: the cursor's line is the
+  // "›" prompt, the cursor sits at its start (nothing typed) and what follows
+  // is drawn dim (the placeholder, not the same words typed).
+  return pane.promptShowsPlaceholder('›')
 }
 function wakeIfNeeded(leaf) {
   const count = teamUnread[leaf.id] || 0
