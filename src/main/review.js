@@ -158,7 +158,9 @@ export async function reviewMerge(args = {}) {
   const title = String(args.title || info.branch)
     .replace(/[\r\n]+/g, ' ')
     .slice(0, 120)
-  const res = await git(info.repo, ['merge', '--no-ff', '--no-edit', '-m', `Merge task "${title}" (${info.branch})`, info.branch], {
+  // The commit that was checked (not the branch name: the agent may commit
+  // again in the meantime).
+  const res = await git(info.repo, ['merge', '--no-ff', '--no-edit', '-m', `Merge task "${title}" (${info.branch})`, info.head || info.branch], {
     timeout: 120000
   })
   if (!res.ok) {

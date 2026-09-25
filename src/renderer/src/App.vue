@@ -1551,13 +1551,17 @@ async function restartLeaf(leafId) {
   if (old.kind === 'agent' && old.agentCommand) {
     if (restartingLeaves.has(leafId)) return
     restartingLeaves.add(leafId)
+    let ok = false
     try {
-      if (await restartInPlace(leafId, { resume: settings.resumeAgents })) return
+      ok = await restartInPlace(leafId, { resume: settings.resumeAgents })
     } finally {
       restartingLeaves.delete(leafId)
     }
-    // Not possible in place (its old terminal would not stop): a new pane.
-    if (findLeaf(leafId) !== old) return
+    // Never a new id for an agent (its messages would stay addressed to the
+    // old one): if its old terminal would not stop, say so and leave it.
+    if (!ok && findLeaf(leafId) === old)
+      showToast(`${old.title} could not be restarted: its terminal did not stop. Try again.`, { kind: 'error', timeout: 8000 })
+    return
   }
   const agent =
     old.kind === 'agent' && old.agentCommand
@@ -4184,12 +4188,13 @@ function dialogOpen() {
 
 function onKey(e) {
   if (dialogOpen()) {
+    // Ctrl+, and F1 close their own dialog; they never open one over another.
     if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === ',') {
       e.preventDefault()
-      settingsOpen.value = !settingsOpen.value
+      settingsOpen.value = false
     } else if (e.key === 'F1') {
       e.preventDefault()
-      helpOpen.value = !helpOpen.value
+      helpOpen.value = false
     }
     // Escape is left to the dialog itself (and to the closing code below).
     if (e.key !== 'Escape') return

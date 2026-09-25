@@ -275,8 +275,10 @@ let freshPath = null
 function readFreshPath() {
   if (process.platform !== 'win32') return process.env.PATH
   try {
+    // UTF-8 output: by default PowerShell writes in the console code page
+    // (cp850 on a French Windows) and folders with accents come out wrong.
     const script =
-      "[Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')"
+      "[Console]::OutputEncoding = [Text.Encoding]::UTF8; [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')"
     const out = execFileSync(
       'powershell.exe',
       ['-NoProfile', '-NonInteractive', '-Command', script],
