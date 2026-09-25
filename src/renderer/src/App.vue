@@ -168,6 +168,8 @@ const teamUnread = reactive({})
 // what the user writes is the user's, and is never sent for them.
 const userDraft = reactive({}) // leafId -> true while a typed line is not sent
 const lastUserKey = {}
+// Panes found running whose line state is not known (older layout).
+const draftUnknown = {}
 const USER_QUIET_MS = 8000
 function noteUserInput(id, data) {
   const s = String(data || '')
@@ -179,14 +181,21 @@ function noteUserInput(id, data) {
   if (s.length > 1 && s.startsWith('\x1b') && !pasted) return
   if (pasted) {
     lastUserKey[id] = Date.now()
-    userDraft[id] = true
+    setDraft(id, true)
     return
   }
   lastUserKey[id] = Date.now()
-  if (/[\r\n]/.test(s)) userDraft[id] = false
+  if (/[\r\n]/.test(s)) setDraft(id, false)
   // Ctrl+C, Esc, Ctrl+U clear the line in the agent CLIs.
-  else if (s === '\x03' || s === '\x1b' || s === '\x15') userDraft[id] = false
-  else if (/[^\x00-\x1f\x7f]/.test(s)) userDraft[id] = true
+  else if (s === '\x03' || s === '\x1b' || s === '\x15') setDraft(id, false)
+  else if (/[^\x00-\x1f\x7f]/.test(s)) setDraft(id, true)
+}
+// Kept on the pane too (saved with the layout), so it survives a reload.
+function setDraft(id, on) {
+  userDraft[id] = on
+  delete draftUnknown[id]
+  const leaf = findLeaf(id)
+  if (leaf && !!leaf.userDraft !== on) leaf.userDraft = on
 }
 function userIsTyping(id) {
   return !!userDraft[id] || Date.now() - (lastUserKey[id] || 0) < USER_QUIET_MS
@@ -422,6 +431,7 @@ async function createLeaf(shellId, agent = null, cwd = null, worktree = null, op
     restoredText,
     broadcast: true
   })
+  leaf.attached = attached
   if (attached) {
     // Still running: nothing to start. Keep the pane's conversation id, and
     // if Codex's id wasn't found yet, keep looking for it.
@@ -523,7 +533,8 @@ function serializeNode(node) {
       startDir: node.startDir || null,
       num: node.num || null,
       team: node.team || null,
-      teamTools: !!node.teamTools
+      teamTools: !!node.teamTools,
+      userDraft: !!node.userDraft
     }
   }
   return {
@@ -559,6 +570,10 @@ async function deserializeNode(snap, cwd = null) {
     if (!leaf) return null
     if (Number.isInteger(snap.num) && snap.num > 0) leaf.num = snap.num
     if (snap.teamTools) leaf.teamTools = true
+    // Still running: its line is what was saved. Unknown (an older layout):
+    // no automatic reminder until the user sends or clears a line there.
+    if (leaf.attached && snap.userDraft === true) setDraft(leaf.id, true)
+    else if (leaf.attached && snap.userDraft === undefined) draftUnknown[leaf.id] = true
     if (snap.title) leaf.title = snap.title
     leaf.broadcast = snap.broadcast !== false
     if (typeof snap.team === 'string') leaf.team = snap.team
@@ -2353,7 +2368,8 @@ function flushPending() {
       awaitingApproval,
       sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
       waitIdle: !!(item.meta && item.meta.waitIdle),
-      userTyping: userIsTyping
+      userTyping: userIsTyping,
+      guard: item.meta && item.meta.guard ? item.meta.guard : null
     }
     // A channel message is marked in flight on disk first; if that is
     // refused, it is not typed now ('refused').
@@ -3317,6 +3333,13 @@ async function restartInPlace(leafId) {
 const WAKE_AFTER_MS = 60000
 const USER_AWAY_MS = 30000
 const wakeState = {} // leafId -> { since, woken }
+// The user is not in this pane, has no line in progress there, and has not
+// typed there for 30 s.
+function wakeAllowed(id) {
+  if (id === activeId.value && document.hasFocus()) return false
+  if (userDraft[id] || draftUnknown[id]) return false
+  return Date.now() - (lastUserKey[id] || 0) >= USER_AWAY_MS
+}
 function wakeIfNeeded(leaf) {
   const count = teamUnread[leaf.id] || 0
   if (!count) {
@@ -3330,13 +3353,12 @@ function wakeIfNeeded(leaf) {
   const t = trackedState[leaf.id]
   if (!t || t.state !== 'idle') return
   if (approvals[leaf.id] || limits[leaf.id] || pendingMessages[leaf.id] || unsent[leaf.id] || delivering.has(leaf.id)) return
-  const inUse = (leaf.id === activeId.value && document.hasFocus()) || userDraft[leaf.id] || Date.now() - (lastUserKey[leaf.id] || 0) < USER_AWAY_MS
-  if (inUse) return
+  if (!wakeAllowed(leaf.id)) return
   w.woken = true
   deliverToAgent(
     leaf.id,
     `[Tessel] You have ${count} new team message${count > 1 ? 's' : ''}: read ${count > 1 ? 'them' : 'it'} with team_inbox.`,
-    { source: 'tessel', scope: 'wake', teamId: leaf.team, waitIdle: true }
+    { source: 'tessel', scope: 'wake', teamId: leaf.team, waitIdle: true, guard: () => wakeAllowed(leaf.id) }
   )
   if (window.shellApi.log) window.shellApi.log('info', `team tools: reminded ${paneLabel(leaf)} (${leaf.id}) of ${count} waiting message(s)`)
 }
