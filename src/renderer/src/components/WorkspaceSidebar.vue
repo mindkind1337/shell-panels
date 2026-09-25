@@ -255,6 +255,17 @@ function openMenu(e, kind, team = null) {
   const r = e.currentTarget.getBoundingClientRect()
   const open = menu.value && menu.value.kind === kind && menu.value.team?.id === team?.id
   menu.value = open ? null : { kind, team, x: Math.max(8, r.right - 220), y: r.bottom + 4 }
+  // Near the bottom of the window, open upwards instead (measured once drawn).
+  if (!open) {
+    nextTick(() => {
+      const el = menuEl.value
+      if (!el || !menu.value) return
+      const h = el.getBoundingClientRect().height
+      if (r.bottom + 4 + h > window.innerHeight - 8) {
+        menu.value = { ...menu.value, y: Math.max(8, r.top - 4 - h) }
+      }
+    })
+  }
 }
 
 function closeMenu() {

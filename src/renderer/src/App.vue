@@ -2277,7 +2277,12 @@ function disbandTeam(teamId) {
   let undone = false
   const commit = setTimeout(() => {
     if (undone) return
-    const still = members.filter((l) => findLeaf(l.id))
+    // Only agents still open and still in no team: one that joined another
+    // team meanwhile is not told it works alone.
+    const still = members.filter((l) => {
+      const leaf = findLeaf(l.id)
+      return leaf && !leaf.team
+    })
     for (const leaf of still) logMembership(leaf, null)
     tellAgents(still, `[Tessel] Team "${team.name}" was ungrouped: you now work on your own.`, teamId)
     recordActivity({ type: 'team', action: 'ungrouped', teamId, wsId, name: team.name })
