@@ -33,6 +33,8 @@ const props = defineProps({
 const ctx = inject('panelCtx')
 const hostEl = ref(null)
 const exited = ref(false)
+// False once the pane is gone (checked after awaits).
+let mounted = true
 const exitCode = ref(null)
 const micMenu = ref(false)
 // Scrolled up into history? Then offer a button back to the latest output.
@@ -795,16 +797,22 @@ onMounted(() => {
       markActivity()
     }
   })
-  unsubExit = window.shellApi.onExit(({ id, exitCode: code, pid }) => {
-    if (id === props.node.id && term) {
-      // A pane restarted in place keeps its id: the end of the process it
-      // replaced is not this pane's end (a late notice from the old one).
-      if (pid && props.node.pid && pid !== props.node.pid) return
-      if (!pid && props.node.restartedAt && Date.now() - props.node.restartedAt < 10000) return
-      exited.value = true
-      exitCode.value = code
-      term.write(`\r\n\x1b[33m[process exited with code ${code}]\x1b[0m\r\n`)
+  unsubExit = window.shellApi.onExit(async ({ id, exitCode: code, pid }) => {
+    if (id !== props.node.id || !term) return
+    // A pane restarted in place keeps its id: the end of the process it
+    // replaced is not this pane's end (a late notice from the old one).
+    if (pid && props.node.pid && pid !== props.node.pid) return
+    // No pid (a terminal host started by an older Tessel): a pane restarted
+    // in place asks the host whether its own terminal still runs.
+    if (!pid && props.node.gen) {
+      const gen = props.node.gen
+      const a = await window.shellApi.attachPty(id).catch(() => null)
+      if (!mounted || props.node.gen !== gen || !term) return
+      if (a && a.ok && !a.exited && (!a.pid || !props.node.pid || a.pid === props.node.pid)) return
     }
+    exited.value = true
+    exitCode.value = code
+    term.write(`\r\n\x1b[33m[process exited with code ${code}]\x1b[0m\r\n`)
   })
 
   // Refit whenever the pane is resized (divider drag, window resize, splits).
@@ -871,6 +879,7 @@ watch(isMaximized, () => {
 })
 
 onBeforeUnmount(() => {
+  mounted = false
   if (ro) ro.disconnect()
   if (fitTimer) clearTimeout(fitTimer)
   if (statusTimer) clearTimeout(statusTimer)
