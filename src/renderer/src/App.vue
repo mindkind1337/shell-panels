@@ -848,11 +848,20 @@ const TASK_PANEL_MIN = 260
 const TASK_PANEL_MAX = 900
 const taskPanelWidth = ref(TASK_PANEL_DEFAULT)
 const taskResizing = ref(false)
+// The width asked for is kept (taskPanelWidth); what is shown always leaves
+// the terminals at least 420 px next to the workspace sidebar, also when the
+// window or the sidebar changes size later.
+const winWidth = ref(window.innerWidth)
+const onWinResize = () => (winWidth.value = window.innerWidth)
+window.addEventListener('resize', onWinResize)
+onBeforeUnmount(() => window.removeEventListener('resize', onWinResize))
 function clampTaskPanel(w) {
-  // Always leave room for the terminals.
-  const max = Math.min(TASK_PANEL_MAX, Math.max(TASK_PANEL_MIN, window.innerWidth - 420))
+  const side = sidebarCollapsed.value ? 52 : sidebarWidth.value
+  const max = Math.min(TASK_PANEL_MAX, Math.max(TASK_PANEL_MIN, winWidth.value - side - 420))
   return Math.round(Math.min(max, Math.max(TASK_PANEL_MIN, w)))
 }
+const taskPanelShown = computed(() => clampTaskPanel(taskPanelWidth.value))
+watch(taskPanelShown, () => window.dispatchEvent(new Event('terminal-layout-change')))
 let taskResizeLastDown = 0
 function startTaskResize(e) {
   if (e.button !== 0) return
@@ -3249,6 +3258,12 @@ const TEAM_ROUND_STUCK_MS = 2 * 60 * 1000
 let teamRound = 0
 let teamRoundStart = 0
 let teamStep = ''
+// A round the watchdog replaced must not change anything when its stuck call
+// finally answers (it would apply old results over newer ones): every step
+// checks it is still the current round after each wait.
+function roundGone(round) {
+  return round !== teamRound
+}
 function teamStepIs(what, team) {
   teamStep = team ? `${what} (${team.name})` : what
 }
@@ -3284,8 +3299,10 @@ async function pollTeams() {
         // The channel keeps its own folder (channelDir): still deliver.
         teamStepIs('channel set-up', team)
         await syncChannel(team)
+        if (roundGone(round)) return
         teamStepIs('channel delivery', team)
-        await deliverChannel(team, members)
+        await deliverChannel(team, members, round)
+        if (roundGone(round)) return
         continue
       }
       for (const m of members) {
@@ -3299,6 +3316,7 @@ async function pollTeams() {
         }
         teamStepIs('inbox', team)
         const res = await window.shellApi.lead.take({ dir, token })
+        if (roundGone(round)) return
         // Its folder is gone (deleted by hand?): make it again next round.
         if (res && res.ok && res.missing) {
           delete team.inboxes[m.id]
@@ -3315,6 +3333,7 @@ async function pollTeams() {
           else if (req.action === 'message') answers.push(runMemberMessage(team, leaf, req))
           else if (!isLead) answers.push(`${item.file}: only the team lead can use "${req.action}". Send a message instead.`)
           else answers.push(await runLeadRequest(team, leaf, req))
+          if (roundGone(round)) return
         }
         const text = answers.filter(Boolean)
         if (!text.length) continue
@@ -3326,8 +3345,10 @@ async function pollTeams() {
       }
       teamStepIs('channel set-up', team)
       await syncChannel(team)
+      if (roundGone(round)) return
       teamStepIs('channel delivery', team)
-      await deliverChannel(team, members)
+      await deliverChannel(team, members, round)
+      if (roundGone(round)) return
     }
     teamStepIs('team map')
     await publishCurrentTeams()
@@ -3713,11 +3734,13 @@ function logTeamMessages(team, res) {
 // Tessel being the board's only writer, and the team's cards (those of its
 // workspace) are published back for them to read. A refused request is
 // told to its agent in the background.
-async function syncTeamBoard(team, dir, members) {
+async function syncTeamBoard(team, dir, members, round = teamRound) {
   if (!window.shellApi.team || !window.shellApi.team.requests) return
   const wsId = teamWsId(team.id)
   const byNum = (n) => members.find((m) => m.num === Number(String(n).slice(1))) || null
   const res = await window.shellApi.team.requests({ dir, teamId: team.id })
+  // Replaced meanwhile: these requests are the new round's to apply.
+  if (roundGone(round)) return
   const refusals = []
   const applied = [] // request files, removed once the board is saved
   if (res && res.ok) {
@@ -3767,8 +3790,12 @@ async function syncTeamBoard(team, dir, members) {
   // its file is surely gone (it can never come back then).
   if (applied.length) {
     const saved = await window.shellApi.taskBoard.save(boardToSave()).catch(() => null)
+    // Replaced meanwhile: the new round saves and removes them (the ledger
+    // already has them: not applied twice).
+    if (roundGone(round)) return
     if (saved && saved.ok) {
       const done = await window.shellApi.team.requestsDone({ dir, teamId: team.id, files: applied }).catch(() => null)
+      if (roundGone(round)) return
       for (const f of (done && done.removed) || []) appliedRequests.delete(`${team.id}/${f}`)
       scheduleTaskSave()
     }
@@ -3787,14 +3814,14 @@ async function syncTeamBoard(team, dir, members) {
   const sig = JSON.stringify(cards)
   if (boardSigs[team.id] === sig) return
   const pub = await window.shellApi.team.tasks({ dir, teamId: team.id, tasks: cards })
-  if (pub && pub.ok) boardSigs[team.id] = sig
+  if (!roundGone(round) && pub && pub.ok) boardSigs[team.id] = sig
 }
 const boardSigs = {} // teamId -> the cards last published
 
 // A message logged unread that is no longer in the recent history (200
 // entries) is looked up in the channel itself, every 10 s at most.
 const unreadCheckAt = {} // teamId -> time of the next look-up
-async function refreshOldUnread(team, dir, history) {
+async function refreshOldUnread(team, dir, history, round = teamRound) {
   if (!teamMsgEvents || !window.shellApi.team || !window.shellApi.team.messageStatus) return
   if (Date.now() < (unreadCheckAt[team.id] || 0)) return
   unreadCheckAt[team.id] = Date.now() + 10000
@@ -3807,7 +3834,7 @@ async function refreshOldUnread(team, dir, history) {
   for (let i = 0; i < ids.length; i += 500) {
     const part = ids.slice(i, i + 500)
     const res = await window.shellApi.team.messageStatus({ dir, teamId: team.id, ids: part })
-    if (!res || !res.ok) break
+    if (roundGone(round) || !res || !res.ok) break
     for (const id of part) {
       // 'gone': the channel keeps only so many read messages.
       if (res.statuses[id] === 'delivered' || res.statuses[id] === 'gone') {
@@ -3819,7 +3846,7 @@ async function refreshOldUnread(team, dir, history) {
   if (changed) activityChanged()
 }
 
-async function deliverChannel(team, members) {
+async function deliverChannel(team, members, round = teamRound) {
   const dir = channelDir(team)
   if (!dir || !window.shellApi.channel || !channelBoxes[team.id]) return
   if (!TEAM_MESSAGES_IN_TERMINALS) {
@@ -3827,8 +3854,10 @@ async function deliverChannel(team, members) {
     // Tessel only takes their outboxes in and turns read notes into receipts.
     teamStepIs('read notes', team)
     if (window.shellApi.channel.acks) await window.shellApi.channel.acks({ dir, teamId: team.id })
+    if (roundGone(round)) return
     teamStepIs('channel read', team)
     const res = await window.shellApi.channel.poll({ dir, teamId: team.id, availableIds: members.map((m) => m.id) })
+    if (roundGone(round)) return
     if (res && res.ok) {
       // Complete counts per member from the channel (the delivery list is
       // capped, so a long backlog for one member would hide another's).
@@ -3847,10 +3876,11 @@ async function deliverChannel(team, members) {
       for (const m of members) wakeIfNeeded(m)
       logTeamMessages(team, res)
       teamStepIs('read status', team)
-      await refreshOldUnread(team, dir, res.history)
+      await refreshOldUnread(team, dir, res.history, round)
+      if (roundGone(round)) return
     }
     teamStepIs('task board', team)
-    await syncTeamBoard(team, dir, members)
+    await syncTeamBoard(team, dir, members, round)
     installTeamToolsOnce() // runs on its own (Claude and Codex take a while)
     restartForTeamTools()
     return
@@ -4584,7 +4614,8 @@ async function restoreOrSeedLayout() {
     }
     broadcast.value = !!saved.broadcast
     sidebarCollapsed.value = !!saved.sidebarCollapsed
-    if (Number.isFinite(saved.taskPanelWidth)) taskPanelWidth.value = clampTaskPanel(saved.taskPanelWidth)
+    if (Number.isFinite(saved.taskPanelWidth))
+      taskPanelWidth.value = Math.round(Math.min(TASK_PANEL_MAX, Math.max(TASK_PANEL_MIN, saved.taskPanelWidth)))
     if (Number.isFinite(saved.sidebarWidth)) {
       sidebarWidth.value = Math.min(480, Math.max(160, saved.sidebarWidth))
     }
@@ -5094,7 +5125,7 @@ onBeforeUnmount(() => {
         v-if="taskPanelOpen"
         class="task-panel"
         :class="{ resizing: taskResizing }"
-        :style="{ flexBasis: taskPanelWidth + 'px' }"
+        :style="{ flexBasis: taskPanelShown + 'px' }"
       >
         <div
           class="task-resize"
