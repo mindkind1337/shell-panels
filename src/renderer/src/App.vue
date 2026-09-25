@@ -3307,6 +3307,18 @@ async function restartForTeamTools() {
   for (const team of teams.value) {
     for (const leaf of teamMembers(team.id)) {
       if (leaf.kind !== 'agent' || leaf.teamTools || restartedForTools.has(leaf.id)) continue
+      // Only an agent that gets the tools (Claude Code, Codex) and whose
+      // conversation Tessel can resume for sure: a quiet terminal is no proof
+      // there is nothing to keep. Otherwise it is left running, and it says so.
+      if (!['claude', 'codex'].includes(leaf.agentId) || !leaf.sessionId) {
+        // Decided once: this agent is never restarted in this session.
+        {
+          restartedForTools.add(leaf.id)
+          const why = ['claude', 'codex'].includes(leaf.agentId) ? 'its conversation could not be found to resume it' : 'it does not use the team tools'
+          if (window.shellApi.log) window.shellApi.log('info', `team tools: left ${paneLabel(leaf)} (${leaf.id}) running: ${why}`)
+        }
+        continue
+      }
       const t = trackedState[leaf.id]
       const quiet = t && t.state === 'idle' && now - t.since > 60000
       const inUse = (leaf.id === activeId.value && document.hasFocus()) || userIsTyping(leaf.id)
