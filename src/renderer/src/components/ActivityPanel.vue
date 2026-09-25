@@ -25,6 +25,7 @@ const PERIODS = [
 const TYPES = [
   { value: 'task', label: 'Tasks' },
   { value: 'message', label: 'Messages' },
+  { value: 'team-chat', label: 'Between agents' },
   { value: 'approval', label: 'Approvals' },
   { value: 'limit', label: 'Limits' },
   { value: 'team', label: 'Team' },
@@ -118,7 +119,7 @@ const rows = computed(() =>
 
 const timeline = computed(() =>
   summary.value.timeline.filter((x) => {
-    const kind = x.kind.replace(/-end$/, '')
+    const kind = x.kind === 'message' && x.scope === 'team-chat' ? 'team-chat' : x.kind.replace(/-end$/, '')
     if (!typeFilter.value.has(kind)) return false
     if (agentFilter.value && x.paneId !== agentFilter.value) return false
     return true
@@ -180,6 +181,13 @@ function taskLine(x) {
 function describe(x) {
   switch (x.kind) {
     case 'message': {
+      // Between agents, through the team tools (not typed anywhere).
+      if (x.scope === 'team-chat')
+        return {
+          who: x.from || 'An agent',
+          text: `→ ${x.title}: “${x.preview}”`,
+          note: x.status === 'read' ? 'read' : 'not read yet'
+        }
       const who = x.source === 'tessel' ? 'Tessel' : x.source === 'lead' ? `${x.from || 'The lead'} (lead)` : x.source === 'agent' ? x.from || 'An agent' : 'You'
       const to = x.scope === 'team' ? ' (team)' : x.scope === 'workspace' ? ' (all agents)' : ''
       const how =

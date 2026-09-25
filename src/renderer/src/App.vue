@@ -3551,6 +3551,57 @@ async function restartForTeamTools() {
 // disk (pending) until they reach agents another way.
 const TEAM_MESSAGES_IN_TERMINALS = false
 
+// Messages between agents go in the Activity timeline (who to whom, the
+// text, read or not yet), so you can follow what the team says to itself.
+// Each channel message is logged once (msgId), then marked read when its
+// recipient has read it. Tessel's own delivery receipts are left out.
+let teamMsgEvents = null // msgId -> activity event (built once the log is loaded)
+function logTeamMessages(team, res) {
+  if (!activityLoaded || !Array.isArray(res.history)) return
+  if (!teamMsgEvents) {
+    teamMsgEvents = new Map()
+    for (const e of activity) if (e.type === 'message' && e.msgId) teamMsgEvents.set(e.msgId, e)
+  }
+  const who = (id) => {
+    const leaf = findLeaf(id)
+    if (leaf) return paneLabel(leaf)
+    const p = (res.participants || []).find((x) => x.id === id)
+    return p ? `${p.num ? `#${p.num} ` : ''}${p.title || 'Agent'}` : 'An agent'
+  }
+  let changed = false
+  for (const m of res.history) {
+    if (!m || !m.id || typeof m.text !== 'string' || m.fromId === 'tessel') continue
+    const read = m.status === 'delivered'
+    const known = teamMsgEvents.get(m.id)
+    if (known) {
+      if (read && known.status !== 'read') {
+        known.status = 'read'
+        changed = true
+      }
+      continue
+    }
+    const to = findLeaf(m.toId)
+    const event = {
+      t: m.createdAt || Date.now(),
+      type: 'message',
+      msgId: m.id,
+      paneId: m.toId,
+      agent: to ? agentInfo(to) : { title: who(m.toId), agentId: null },
+      status: read ? 'read' : 'unread',
+      source: 'agent',
+      from: who(m.fromId),
+      scope: 'team-chat',
+      teamId: team.id,
+      wsId: teamWsId(team.id),
+      preview: m.text.replace(/\s+/g, ' ').slice(0, 160),
+      text: m.text.slice(0, 8000)
+    }
+    recordActivity(event)
+    teamMsgEvents.set(m.id, activity[activity.length - 1])
+  }
+  if (changed) activityChanged()
+}
+
 async function deliverChannel(team, members) {
   const dir = channelDir(team)
   if (!dir || !window.shellApi.channel || !channelBoxes[team.id]) return
@@ -3575,6 +3626,7 @@ async function deliverChannel(team, members) {
         else delete teamUnread[m.id]
       }
       for (const m of members) wakeIfNeeded(m)
+      logTeamMessages(team, res)
     }
     installTeamToolsOnce() // runs on its own (Claude and Codex take a while)
     restartForTeamTools()
