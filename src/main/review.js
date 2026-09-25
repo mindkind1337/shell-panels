@@ -43,13 +43,26 @@ async function check({ root, path, branch, target } = {}) {
     const rel = relative(base, resolve(path))
     if (!rel || rel.startsWith('..') || isAbsolute(rel)) return { error: 'Not a task copy of this project.' }
     const list = await git(repo, ['worktree', 'list', '--porcelain'])
-    const known = list.stdout
-      .split(/\r?\n/)
-      .filter((l) => l.startsWith('worktree '))
-      .map((l) => l.slice(9))
-    out.path = known.find((p) => samePath(p, path)) || null
-    out.listed = !!out.path
-    if (!out.path) out.path = resolve(path)
+    const rec = parseWorktrees(list.stdout).find((w) => samePath(w.path, path))
+    // A listed copy must be the one on this branch: never pair copy A with
+    // branch B.
+    if (rec && rec.branch !== `refs/heads/${branch}`)
+      return { error: `That copy is not on branch ${branch}.` }
+    out.path = rec ? rec.path : resolve(path)
+    out.listed = !!rec
+  }
+  return out
+}
+
+// `git worktree list --porcelain` -> [{ path, branch }] (branch: full ref, or null).
+export function parseWorktrees(text) {
+  const out = []
+  let cur = null
+  for (const line of String(text || '').split(/\r?\n/)) {
+    if (line.startsWith('worktree ')) {
+      cur = { path: line.slice(9), branch: null }
+      out.push(cur)
+    } else if (cur && line.startsWith('branch ')) cur.branch = line.slice(7)
   }
   return out
 }
@@ -70,7 +83,7 @@ export async function reviewInfo(args) {
   if (!mb.ok) return { ok: false, error: `${branch} and ${target} have no common history.` }
   const base = mb.stdout.trim()
 
-  const [head, ns, num, log, merge, rootHead, rootStatus, behind] = await Promise.all([
+  const [head, ns, num, log, merge, rootHead, rootStatus, behind, raw] = await Promise.all([
     git(repo, ['rev-parse', branch]),
     git(repo, ['diff', '--name-status', '--no-renames', base, branch]),
     git(repo, ['diff', '--numstat', '--no-renames', base, branch]),
@@ -78,9 +91,10 @@ export async function reviewInfo(args) {
     git(repo, ['merge-tree', '--write-tree', '--name-only', '--no-messages', target, branch]),
     git(repo, ['symbolic-ref', '--quiet', '--short', 'HEAD']),
     git(repo, ['status', '--porcelain=v1', '--untracked-files=all']),
-    git(repo, ['rev-list', '--count', `${branch}..${target}`])
+    git(repo, ['rev-list', '--count', `${branch}..${target}`]),
+    git(repo, ['diff', '--raw', '--no-renames', '--no-abbrev', base, branch])
   ])
-  const files = parseChangedFiles(ns.stdout, num.stdout)
+  const files = parseChangedFiles(ns.stdout, num.stdout, raw.stdout)
   // merge-tree exits 1 with conflicts, other codes on errors.
   const conflicts = merge.code === 1 ? parseMergeTree(merge.stdout) : []
   const mergeCheck = merge.ok || merge.code === 1 ? 'done' : 'failed'
@@ -161,9 +175,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms))
 
 async function stillListed(repo, path) {
   const list = await git(repo, ['worktree', 'list', '--porcelain'])
-  return list.stdout
-    .split(/\r?\n/)
-    .some((l) => l.startsWith('worktree ') && samePath(l.slice(9), path))
+  return parseWorktrees(list.stdout).some((w) => samePath(w.path, path))
 }
 
 // Delete the task's copy and its branch. `force` also drops work that was

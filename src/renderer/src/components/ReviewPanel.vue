@@ -37,7 +37,7 @@ const cardEl = ref(null)
 const feedbackEl = ref(null)
 
 // "Viewed" marks survive closing the panel (not a restart). A file whose
-// line counts change after a new commit is unmarked.
+// content changes in a new commit is unmarked.
 const viewed = viewedStore(props.task.id)
 
 async function refresh() {
@@ -65,8 +65,9 @@ function setViewed(f, on) {
   else delete viewed[f.path]
 }
 
+// A file's content id (git blob); without one, any new commit unmarks it.
 function sig(f) {
-  return `${f.status}:${f.added}:${f.removed}`
+  return f.blob ? `${f.status}:${f.blob}` : `${f.status}:${f.added}:${f.removed}:${info.value && info.value.head}`
 }
 
 async function loadDiff(file) {

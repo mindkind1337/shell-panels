@@ -3,7 +3,7 @@ import { execFileSync } from 'child_process'
 import fs from 'fs'
 import os from 'os'
 import { join } from 'path'
-import { reviewInfo, reviewDiff, reviewMerge, reviewRemove } from '../review'
+import { reviewInfo, reviewDiff, reviewMerge, reviewRemove, parseWorktrees } from '../review'
 import {
   parseChangedFiles,
   parseCommits,
@@ -17,9 +17,26 @@ describe('diff parsers', () => {
   it('joins name-status and numstat', () => {
     const files = parseChangedFiles('M\tsrc/a.js\nA\tnew.txt\nD\told.md\n', '3\t1\tsrc/a.js\n5\t0\tnew.txt\n0\t9\told.md\n')
     expect(files).toEqual([
-      { path: 'new.txt', status: 'A', added: 5, removed: 0, binary: false },
-      { path: 'old.md', status: 'D', added: 0, removed: 9, binary: false },
-      { path: 'src/a.js', status: 'M', added: 3, removed: 1, binary: false }
+      { path: 'new.txt', status: 'A', added: 5, removed: 0, binary: false, blob: '' },
+      { path: 'old.md', status: 'D', added: 0, removed: 9, binary: false, blob: '' },
+      { path: 'src/a.js', status: 'M', added: 3, removed: 1, binary: false, blob: '' }
+    ])
+  })
+  it('keeps each file content id from --raw', () => {
+    const a = 'a'.repeat(40)
+    const b = 'b'.repeat(40)
+    const z = '0'.repeat(40)
+    const raw = `:100644 100644 ${a} ${b} M\tsrc/a.js\n:100644 000000 ${a} ${z} D\told.md\n`
+    const files = parseChangedFiles('M\tsrc/a.js\nD\told.md\n', '1\t1\tsrc/a.js\n0\t9\told.md\n', raw)
+    expect(files.find((f) => f.path === 'src/a.js').blob).toBe(b)
+    expect(files.find((f) => f.path === 'old.md').blob).toBe(a)
+  })
+  it('reads worktree records with their branch', () => {
+    const text = 'worktree C:/p\nHEAD abc\nbranch refs/heads/main\n\nworktree C:/p.worktrees/x\nHEAD def\nbranch refs/heads/agent/x\n\nworktree C:/p.worktrees/d\nHEAD 123\ndetached\n'
+    expect(parseWorktrees(text)).toEqual([
+      { path: 'C:/p', branch: 'refs/heads/main' },
+      { path: 'C:/p.worktrees/x', branch: 'refs/heads/agent/x' },
+      { path: 'C:/p.worktrees/d', branch: null }
     ])
   })
   it('marks binary files', () => {
@@ -155,6 +172,39 @@ describe('review against git', () => {
     expect(rm.ok).toBe(true)
     expect(fs.existsSync(copy)).toBe(false)
     expect(g(repo, 'branch', '--list', 'agent/fix').trim()).toBe('')
+  })
+
+  it('never pairs one task copy with another task branch', async () => {
+    const copyA = join(dir, 'proj.worktrees', 'ta')
+    const copyB = join(dir, 'proj.worktrees', 'tb')
+    g(repo, 'worktree', 'add', '-q', '-b', 'agent/ta', copyA, 'HEAD')
+    g(repo, 'worktree', 'add', '-q', '-b', 'agent/tb', copyB, 'HEAD')
+    const crossed = { root: repo, path: copyA, branch: 'agent/tb', target: 'main', force: true }
+    const res = await reviewRemove(crossed)
+    expect(res.ok).toBe(false)
+    expect(res.error).toMatch(/not on branch agent\/tb/)
+    expect((await reviewInfo(crossed)).ok).toBe(false)
+    expect((await reviewMerge(crossed)).ok).toBe(false)
+    expect(fs.existsSync(copyA)).toBe(true)
+    expect(g(repo, 'branch', '--list', 'agent/tb').trim()).not.toBe('')
+    expect((await reviewRemove({ ...crossed, path: copyA, branch: 'agent/ta' })).ok).toBe(true)
+    expect((await reviewRemove({ ...crossed, path: copyB, branch: 'agent/tb' })).ok).toBe(true)
+  })
+
+  it('a new commit with the same line counts changes the file id', async () => {
+    const copy2 = join(dir, 'proj.worktrees', 'same')
+    g(repo, 'worktree', 'add', '-q', '-b', 'agent/same', copy2, 'HEAD')
+    const args = { root: repo, path: copy2, branch: 'agent/same', target: 'main' }
+    fs.writeFileSync(join(copy2, 'b.txt'), 'first\n')
+    g(copy2, 'commit', '-q', '-am', 'one')
+    const before = (await reviewInfo(args)).files[0]
+    fs.writeFileSync(join(copy2, 'b.txt'), 'second\n')
+    g(copy2, 'commit', '-q', '-am', 'two')
+    const after = (await reviewInfo(args)).files[0]
+    expect([before.added, before.removed]).toEqual([after.added, after.removed])
+    expect(before.blob).toMatch(/^[0-9a-f]{40}$/)
+    expect(after.blob).not.toBe(before.blob)
+    await reviewRemove({ ...args, force: true })
   })
 
   it('discard needs force for an unmerged branch', async () => {

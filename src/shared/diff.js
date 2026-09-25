@@ -3,8 +3,9 @@
 // no DOM, so the main process and the tests share them.
 
 // `git diff --name-status --no-renames` + `git diff --numstat --no-renames`
-// -> [{ path, status: 'A'|'M'|'D', added, removed, binary }], sorted by path.
-export function parseChangedFiles(nameStatus, numstat) {
+// (+ `git diff --raw --no-abbrev` for each file's content id)
+// -> [{ path, status: 'A'|'M'|'D', added, removed, binary, blob }], sorted by path.
+export function parseChangedFiles(nameStatus, numstat, raw = '') {
   const byPath = new Map()
   for (const line of String(nameStatus || '').split(/\r?\n/)) {
     const m = /^([AMDTUX])\t(.+)$/.exec(line)
@@ -22,6 +23,15 @@ export function parseChangedFiles(nameStatus, numstat) {
     }
     byPath.set(m[3], f)
   }
+  // `:100644 100644 <old> <new> M<tab>path`: the new content's id (the old
+  // one for a deleted file), so a new commit to a file is noticed even when
+  // its line counts stay the same.
+  for (const line of String(raw || '').split(/\r?\n/)) {
+    const m = /^:\d+ \d+ ([0-9a-f]+) ([0-9a-f]+) ([A-Z])\d*\t(.+)$/.exec(line)
+    const f = m && byPath.get(m[4])
+    if (f) f.blob = m[3] === 'D' ? m[1] : m[2]
+  }
+  for (const f of byPath.values()) if (!f.blob) f.blob = ''
   return [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path))
 }
 
