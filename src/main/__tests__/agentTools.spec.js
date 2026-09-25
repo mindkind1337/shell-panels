@@ -10,8 +10,13 @@ import {
   slugify,
   normalizeServerConfig,
   parseRpcBody,
-  hklFromTip
+  hklFromTip,
+  shimTarget,
+  run
 } from '../agentTools'
+import fs from 'fs'
+import os from 'os'
+import { join } from 'path'
 
 describe('isValidServerName', () => {
   it('accepts simple names', () => {
@@ -208,5 +213,54 @@ describe('hklFromTip', () => {
     expect(hklFromTip('0409:00010409')).toBe(null)
     expect(hklFromTip('')).toBe(null)
     expect(hklFromTip('abc')).toBe(null)
+  })
+})
+
+describe('npm launchers where PowerShell scripts are blocked', () => {
+  const codexCmd = [
+    '@ECHO off',
+    'IF EXIST "%dp0%\\node.exe" (',
+    '  SET "_prog=%dp0%\\node.exe"',
+    ') ELSE (',
+    '  SET "_prog=node"',
+    ')',
+    'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*'
+  ].join('\r\n')
+  const claudeCmd = '@ECHO off\r\nCALL :find_dp0\r\n"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"   %*\r\n'
+  const dir = 'C:\\npm'
+  const has = (...files) => (p) => files.includes(p)
+
+  it('finds the script a node launcher starts, run by node', () => {
+    const js = join(dir, 'node_modules', '@openai', 'codex', 'bin', 'codex.js')
+    expect(shimTarget(codexCmd, dir, 'C:\\node\\node.exe', has(js))).toEqual({ file: 'C:\\node\\node.exe', pre: [js] })
+    // A node.exe next to the launcher is the one it uses.
+    const local = join(dir, 'node.exe')
+    expect(shimTarget(codexCmd, dir, 'C:\\node\\node.exe', has(js, local))).toEqual({ file: local, pre: [js] })
+  })
+
+  it('finds the program a launcher starts directly', () => {
+    const exe = join(dir, 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe')
+    expect(shimTarget(claudeCmd, dir, null, has(exe))).toEqual({ file: exe, pre: [] })
+  })
+
+  it('gives up on what it does not understand', () => {
+    expect(shimTarget('@echo off\r\nsomething %*', dir, 'node', () => true)).toBe(null)
+    expect(shimTarget(claudeCmd, dir, null, () => false)).toBe(null) // target missing
+    const js = join(dir, 'node_modules', '@openai', 'codex', 'bin', 'codex.js')
+    expect(shimTarget(codexCmd, dir, null, has(js))).toBe(null) // no node
+  })
+
+  it('arguments reach the program exactly (no shell in between)', async () => {
+    const tmp = fs.mkdtempSync(join(os.tmpdir(), 'tessel-shim-'))
+    try {
+      const script = join(tmp, 'echo.js')
+      fs.writeFileSync(script, 'process.stdout.write(JSON.stringify(process.argv.slice(2)))')
+      const target = shimTarget(`"%dp0%\\echo.js" %*`, tmp, process.execPath)
+      const args = ['https://example.invalid/mcp?first=1&second=2', 'KEY=%PATH%', 'say "hi" & bye', 'with space', '^caret|pipe<>']
+      const res = await run(target.file, [...target.pre, ...args])
+      expect(JSON.parse(res.stdout)).toEqual(args)
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true })
+    }
   })
 })

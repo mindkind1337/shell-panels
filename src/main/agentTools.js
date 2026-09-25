@@ -166,26 +166,99 @@ export function run(file, args, opts = {}) {
   })
 }
 
+// The program an npm launcher (.cmd shim) starts, read from its text:
+// -> { file, pre } (pre: arguments before the user's, like the script for
+// node), or null when it is not a launcher this understands.
+//   "%dp0%\node_modules\@openai\codex\bin\codex.js" %*   -> node + script
+//   "%dp0%\node_modules\...\claude.exe"   %*             -> the .exe
+export function shimTarget(cmdText, dir, nodePath, exists = fs.existsSync) {
+  const m = /"%~?dp0%?\\?([^"%]+)"\s*%\*/i.exec(String(cmdText || ''))
+  if (!m) return null
+  const target = join(dir, m[1])
+  if (!exists(target)) return null
+  if (/\.exe$/i.test(target)) return { file: target, pre: [] }
+  if (/\.(c|m)?js$/i.test(target)) {
+    const local = join(dir, 'node.exe')
+    const node = exists(local) ? local : nodePath
+    return node ? { file: node, pre: [target] } : null
+  }
+  return null
+}
+
 // Run an agent CLI through PowerShell so .cmd/.ps1 shims resolve, with PATH
 // re-read from the registry (so a PATH change takes effect without restarting
 // Tessel). Arguments are passed as single-quoted literals.
-function runAgentCli(exe, args, cwd) {
+// Where PowerShell scripts are blocked (Restricted, the Windows default, or
+// AllSigned) the npm .ps1 shim cannot run, and its .cmd would let cmd.exe
+// re-read the arguments (a & in a URL, a %): there the real program is
+// started directly with its arguments, no shell in between. The policy
+// itself is never changed.
+let scriptsBlocked = null // checked once per session
+const PS_PATH =
+  "$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')"
+
+async function runAgentCli(exe, args, cwd) {
   if (process.platform !== 'win32') return run(exe, args, { cwd })
+  const dir = cwd && fs.existsSync(cwd) ? cwd : os.homedir()
+  if (scriptsBlocked === null) {
+    const res = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '[string](Get-ExecutionPolicy)'], {
+      timeout: 20000
+    })
+    scriptsBlocked = res.ok && /^(Restricted|AllSigned)$/i.test(res.stdout.trim())
+  }
+  if (scriptsBlocked) return runDirect(exe, args, dir)
   const script = [
     '$ErrorActionPreference = "Continue"',
-    "$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')",
-    // Where scripts are blocked (Restricted, the Windows default, or
-    // AllSigned) an npm .ps1 shim cannot run: use its .cmd/.exe instead. Only
-    // then, since cmd.exe re-reads arguments (a & in a URL would cut it).
-    "$cli = $null; if (@('Restricted', 'AllSigned') -contains [string](Get-ExecutionPolicy)) { $cli = Get-Command -CommandType Application -Name " + psQuote(exe) + " -ErrorAction SilentlyContinue | Select-Object -First 1 }",
-    `if ($cli) { & $cli.Source ${args.map(psQuote).join(' ')} } else { & ${psQuote(exe)} ${args.map(psQuote).join(' ')} }`,
+    PS_PATH,
+    `& ${psQuote(exe)} ${args.map(psQuote).join(' ')}`,
     'exit $LASTEXITCODE'
   ].join('; ')
   const encoded = Buffer.from(script, 'utf16le').toString('base64')
   return run('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], {
-    cwd: cwd && fs.existsSync(cwd) ? cwd : os.homedir(),
+    cwd: dir,
     timeout: 90000
   })
+}
+
+// The program behind `exe` (found with the fresh PATH), started directly.
+async function runDirect(exe, args, cwd) {
+  const probe = [
+    PS_PATH,
+    '[Console]::OutputEncoding = [Text.Encoding]::UTF8',
+    `$c = Get-Command -CommandType Application -Name ${psQuote(exe)} -ErrorAction SilentlyContinue | Select-Object -First 1`,
+    "$n = Get-Command -CommandType Application -Name 'node' -ErrorAction SilentlyContinue | Select-Object -First 1",
+    'ConvertTo-Json -Compress @{ app = [string]$c.Source; node = [string]$n.Source; path = $env:Path }'
+  ].join('; ')
+  const res = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', probe], { timeout: 20000 })
+  let found = null
+  try {
+    found = JSON.parse(res.stdout.trim())
+  } catch {
+    found = null
+  }
+  const app = found && found.app
+  let target = null
+  if (app && /\.exe$/i.test(app)) target = { file: app, pre: [] }
+  else if (app && /\.cmd$/i.test(app)) {
+    try {
+      target = shimTarget(fs.readFileSync(app, 'utf8'), dirname(app), found.node || null)
+    } catch {
+      target = null
+    }
+  }
+  if (!target) {
+    return {
+      ok: false,
+      code: 1,
+      stdout: '',
+      stderr: `Could not start ${exe}: PowerShell scripts are blocked on this computer and ${exe}'s launcher could not be read.`,
+      error: null
+    }
+  }
+  const env = { ...cleanEnv(process.env) }
+  for (const k of Object.keys(env)) if (k.toLowerCase() === 'path') delete env[k]
+  env.Path = found.path || process.env.PATH || ''
+  return run(target.file, [...target.pre, ...args], { cwd, timeout: 90000, env })
 }
 
 function cliError(res, fallback) {
