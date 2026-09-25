@@ -3159,7 +3159,13 @@ async function ackChannel(dir, teamId, d, key, tries = 0) {
   else channelQueued.delete(key)
 }
 
+// Team messages are NOT typed into terminals any more: the user works in those
+// same terminals, and typing there interfered with them. Messages stay on
+// disk (pending) until they reach agents another way.
+const TEAM_MESSAGES_IN_TERMINALS = false
+
 async function deliverChannel(team, members) {
+  if (!TEAM_MESSAGES_IN_TERMINALS) return
   const dir = channelDir(team)
   if (!dir || !window.shellApi.channel || !channelBoxes[team.id]) return
   const res = await window.shellApi.channel.poll({ dir, teamId: team.id, availableIds: members.map((m) => m.id) })
