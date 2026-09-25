@@ -1,7 +1,7 @@
 // Persistent, two-way team messages. Each agent writes a JSON file into its
 // private outbox; the renderer polls for deliveries and acknowledges them only
-// after the terminal has received the message. Unacknowledged messages remain
-// on disk across app restarts.
+// after the terminal has received the message. Pending and held messages remain
+// on disk across app restarts; a held draft is never replayed automatically.
 import fs from 'fs'
 import { join, resolve, isAbsolute } from 'path'
 import { randomBytes, createHash } from 'crypto'
@@ -56,6 +56,10 @@ function activeMembers(state) {
   return Object.entries(state.members)
     .filter(([, m]) => m.active)
     .map(([id, m]) => ({ id, ...m }))
+}
+
+function isHeld(message) {
+  return message.status === 'inflight' || message.status === 'uncertain'
 }
 
 function guide(outbox, members, selfId) {
@@ -229,9 +233,10 @@ function ingest(root, state) {
   return changed
 }
 
-// Returns messages still awaiting delivery. The renderer should remember ids
-// within a session, queue each once, and call ackTeamDelivery after paste.
-// On restart, unacknowledged messages are returned again instead of vanishing.
+// Hold before typing, then acknowledge only after confirmed acceptance. Held
+// messages are returned separately, including for unavailable active members.
+// On restart the renderer treats either held status as uncertain; a later
+// message to that pane also waits until the draft is explicitly resolved.
 export function pollTeamChannel({ dir, teamId, availableIds } = {}) {
   try {
     const root = location({ dir, teamId })
@@ -240,11 +245,14 @@ export function pollTeamChannel({ dir, teamId, availableIds } = {}) {
     const state = readState(root)
     ingest(root, state)
     const available = Array.isArray(availableIds) ? new Set(availableIds) : null
+    const held = state.messages.filter((m) => isHeld(m) && state.members[m.toId]?.active)
+    const blocked = new Set(held.map((m) => m.toId))
     const deliveries = state.messages
       .filter(
         (m) =>
           m.status === 'pending' &&
           state.members[m.toId]?.active &&
+          !blocked.has(m.toId) &&
           (!available || available.has(m.toId))
       )
       .slice(0, MAX_DELIVERIES)
@@ -254,7 +262,60 @@ export function pollTeamChannel({ dir, teamId, availableIds } = {}) {
       title: m.title,
       active: !!m.active
     }))
-    return { ok: true, participants, deliveries, history: state.messages.slice(-200) }
+    return { ok: true, participants, deliveries, held, history: state.messages.slice(-200) }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
+}
+
+// Persist before paste, and keep the original hold time when marking a delivery
+// uncertain. Repeating the same hold is idempotent; it does not authorize a
+// second paste. A recipient can have only one held draft in this team.
+export function holdTeamDelivery({ dir, teamId, id, toId, state: status } = {}) {
+  try {
+    if (status !== 'inflight' && status !== 'uncertain')
+      return { ok: false, error: 'Invalid delivery hold state.' }
+    const root = location({ dir, teamId })
+    if (!root) return { ok: false, error: 'Invalid team channel location.' }
+    const state = readState(root)
+    const message = state.messages.find((m) => m.id === id && m.toId === toId)
+    if (!message) return { ok: false, error: 'Unknown delivery.' }
+    if (message.status === 'delivered')
+      return { ok: false, error: 'Delivery is already confirmed.' }
+    if (!state.members[toId]?.active)
+      return { ok: false, error: 'Recipient is not an active teammate.' }
+    if (state.messages.some((m) => m.id !== id && m.toId === toId && isHeld(m)))
+      return { ok: false, error: 'Recipient already has an unresolved delivery.' }
+    if (message.status === 'uncertain' && status === 'inflight')
+      return { ok: false, error: 'Release the uncertain delivery before retrying.' }
+    if (message.status === status) return { ok: true }
+    if (!isHeld(message)) message.heldAt = Date.now()
+    message.status = status
+    saveState(root, state)
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
+}
+
+// Retry only after a definite pre-paste failure, or after the user has cleared
+// the old draft and explicitly requested another attempt. Never reopen a
+// confirmed message, including when a late failure races its acknowledgement.
+export function releaseTeamDelivery({ dir, teamId, id, toId } = {}) {
+  try {
+    const root = location({ dir, teamId })
+    if (!root) return { ok: false, error: 'Invalid team channel location.' }
+    const state = readState(root)
+    const message = state.messages.find((m) => m.id === id && m.toId === toId)
+    if (!message) return { ok: false, error: 'Unknown delivery.' }
+    if (message.status === 'delivered')
+      return { ok: false, error: 'Delivery is already confirmed.' }
+    if (message.status === 'pending') return { ok: true }
+    if (!isHeld(message)) return { ok: false, error: 'Delivery is not held.' }
+    message.status = 'pending'
+    delete message.heldAt
+    saveState(root, state)
+    return { ok: true }
   } catch (err) {
     return { ok: false, error: err.message }
   }

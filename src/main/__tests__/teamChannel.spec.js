@@ -1,8 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'fs'
 import os from 'os'
 import { join, dirname } from 'path'
-import { ensureTeamChannel, pollTeamChannel, ackTeamDelivery } from '../teamChannel'
+import {
+  ensureTeamChannel,
+  pollTeamChannel,
+  ackTeamDelivery,
+  holdTeamDelivery,
+  releaseTeamDelivery
+} from '../teamChannel'
 
 describe('persistent team channel', () => {
   let dir, outboxes
@@ -19,7 +25,10 @@ describe('persistent team channel', () => {
     expect(ready.outboxes[0].guide).toMatch(/"to":"#2"/)
     outboxes = Object.fromEntries(ready.outboxes.map((m) => [m.id, m.outbox]))
   })
-  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
+  afterEach(() => {
+    vi.restoreAllMocks()
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
 
   const put = (box, name, data) => fs.writeFileSync(join(box, `${name}.json`), JSON.stringify(data))
 
@@ -106,6 +115,144 @@ describe('persistent team channel', () => {
     expect(pollTeamChannel({ dir, teamId }).deliveries[0].text).toMatch(/invalid JSON/)
   })
 
+  it.each(['inflight', 'uncertain'])(
+    'keeps %s drafts held across a module reload',
+    async (status) => {
+      put(outboxes['pane-a'], 'draft', { to: '#2', text: 'Do not paste me twice.' })
+      const message = pollTeamChannel({ dir, teamId }).deliveries[0]
+      const request = { dir, teamId, id: message.id, toId: message.toId }
+      expect(holdTeamDelivery({ ...request, state: status }).ok).toBe(true)
+      const stateFile = join(dirname(dirname(outboxes['pane-a'])), 'state.json')
+      expect(JSON.parse(fs.readFileSync(stateFile, 'utf8')).messages[0]).toMatchObject({
+        status,
+        heldAt: expect.any(Number)
+      })
+
+      vi.resetModules()
+      const restarted = await import('../teamChannel')
+      expect(restarted.ensureTeamChannel({ dir, teamId, members }).ok).toBe(true)
+      const polled = restarted.pollTeamChannel({ dir, teamId })
+      expect(polled.deliveries).toEqual([])
+      expect(polled.held).toHaveLength(1)
+      expect(polled.held[0]).toMatchObject({ id: message.id, status, text: message.text })
+      expect(polled.history).toHaveLength(1) // No delivery receipt before confirmation.
+    }
+  )
+
+  it('blocks a second draft for the same pane but lets other teammates continue', () => {
+    put(outboxes['pane-a'], '01-first', { to: '#2', text: 'First draft' })
+    put(outboxes['pane-a'], '02-second', { to: '#2', text: 'Second draft' })
+    put(outboxes['pane-a'], '03-other', { to: '#3', text: 'Independent message' })
+    const before = pollTeamChannel({ dir, teamId }).deliveries
+    const [first, second] = before
+    expect(
+      holdTeamDelivery({ dir, teamId, id: first.id, toId: first.toId, state: 'inflight' }).ok
+    ).toBe(true)
+    // A renderer with the earlier poll result cannot hold the next draft too.
+    expect(
+      holdTeamDelivery({ dir, teamId, id: second.id, toId: second.toId, state: 'inflight' }).ok
+    ).toBe(false)
+    const blocked = pollTeamChannel({ dir, teamId })
+    expect(blocked.deliveries.map((m) => m.text)).toEqual(['Independent message'])
+    expect(blocked.held.map((m) => m.id)).toEqual([first.id])
+    expect(ackTeamDelivery({ dir, teamId, id: first.id, toId: first.toId }).ok).toBe(true)
+    expect(pollTeamChannel({ dir, teamId }).deliveries.some((m) => m.id === second.id)).toBe(true)
+  })
+
+  it('keeps unavailable holds visible and preserves them while a member leaves and rejoins', () => {
+    put(outboxes['pane-a'], 'draft', { to: '#2', text: 'Still unresolved' })
+    const message = pollTeamChannel({ dir, teamId }).deliveries[0]
+    expect(
+      holdTeamDelivery({ dir, teamId, id: message.id, toId: 'pane-b', state: 'uncertain' }).ok
+    ).toBe(true)
+    expect(pollTeamChannel({ dir, teamId, availableIds: [] }).held.map((m) => m.id)).toEqual([
+      message.id
+    ])
+    ensureTeamChannel({ dir, teamId, members: [members[0], members[2]] })
+    expect(pollTeamChannel({ dir, teamId }).held).toEqual([])
+    ensureTeamChannel({ dir, teamId, members })
+    const back = pollTeamChannel({ dir, teamId })
+    expect(back.deliveries).toEqual([])
+    expect(back.held[0]).toMatchObject({ id: message.id, status: 'uncertain' })
+  })
+
+  it('preserves the hold time and requires release before retrying an uncertain draft', () => {
+    put(outboxes['pane-a'], 'draft', { to: '#2', text: 'An uncertain draft' })
+    const message = pollTeamChannel({ dir, teamId }).deliveries[0]
+    const request = { dir, teamId, id: message.id, toId: 'pane-b' }
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1000)
+    expect(holdTeamDelivery({ ...request, state: 'inflight' }).ok).toBe(true)
+    now.mockReturnValue(2000)
+    expect(holdTeamDelivery({ ...request, state: 'uncertain' }).ok).toBe(true)
+    expect(holdTeamDelivery({ ...request, state: 'uncertain' }).ok).toBe(true)
+    expect(holdTeamDelivery({ ...request, state: 'inflight' }).ok).toBe(false)
+    expect(pollTeamChannel({ dir, teamId }).held[0].heldAt).toBe(1000)
+    expect(releaseTeamDelivery(request).ok).toBe(true)
+    expect(releaseTeamDelivery(request).ok).toBe(true)
+    const retry = pollTeamChannel({ dir, teamId })
+    expect(retry.held).toEqual([])
+    expect(retry.deliveries).toHaveLength(1)
+    expect(retry.deliveries[0].id).toBe(message.id)
+    expect(retry.deliveries[0].heldAt).toBeUndefined()
+    expect(holdTeamDelivery({ ...request, state: 'inflight' }).ok).toBe(true)
+    expect(pollTeamChannel({ dir, teamId }).held[0].heldAt).toBe(2000)
+  })
+
+  it.each(['inflight', 'uncertain'])(
+    'confirms %s once and cannot reopen it with a late failure',
+    (status) => {
+      put(outboxes['pane-a'], 'draft', { to: '#2', text: 'Confirmed now' })
+      const message = pollTeamChannel({ dir, teamId }).deliveries[0]
+      const request = { dir, teamId, id: message.id, toId: 'pane-b' }
+      expect(holdTeamDelivery({ ...request, state: status }).ok).toBe(true)
+      expect(ackTeamDelivery(request).ok).toBe(true)
+      expect(ackTeamDelivery(request).ok).toBe(true)
+      expect(releaseTeamDelivery(request).ok).toBe(false)
+      expect(holdTeamDelivery({ ...request, state: 'uncertain' }).ok).toBe(false)
+      const polled = pollTeamChannel({ dir, teamId })
+      expect(polled.held).toEqual([])
+      expect(polled.deliveries).toHaveLength(1)
+      expect(polled.deliveries[0]).toMatchObject({
+        fromId: 'tessel',
+        toId: 'pane-a',
+        replyTo: message.id
+      })
+      expect(polled.history.find((m) => m.id === message.id).status).toBe('delivered')
+    }
+  )
+
+  it('rejects invalid hold and release requests without altering the saved message', () => {
+    put(outboxes['pane-a'], 'draft', { to: '#2', text: 'Keep pending' })
+    const message = pollTeamChannel({ dir, teamId }).deliveries[0]
+    const request = { dir, teamId, id: message.id, toId: 'pane-b' }
+    const stateFile = join(dirname(dirname(outboxes['pane-a'])), 'state.json')
+    const before = fs.readFileSync(stateFile, 'utf8')
+    expect(holdTeamDelivery({ ...request, state: 'delivered' }).ok).toBe(false)
+    for (const change of [{ id: 'missing' }, { toId: 'pane-c' }, { teamId: '../unsafe' }]) {
+      expect(holdTeamDelivery({ ...request, ...change, state: 'inflight' }).ok).toBe(false)
+      expect(releaseTeamDelivery({ ...request, ...change }).ok).toBe(false)
+    }
+    expect(fs.readFileSync(stateFile, 'utf8')).toBe(before)
+  })
+
+  it('does not report a successful hold if persisting it fails', () => {
+    put(outboxes['pane-a'], 'draft', { to: '#2', text: 'Cannot begin without a saved hold' })
+    const message = pollTeamChannel({ dir, teamId }).deliveries[0]
+    const rename = vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => {
+      throw new Error('Simulated disk failure')
+    })
+    expect(
+      holdTeamDelivery({ dir, teamId, id: message.id, toId: 'pane-b', state: 'inflight' })
+    ).toMatchObject({
+      ok: false,
+      error: 'Simulated disk failure'
+    })
+    rename.mockRestore()
+    const polled = pollTeamChannel({ dir, teamId })
+    expect(polled.held).toEqual([])
+    expect(polled.deliveries.map((m) => m.id)).toEqual([message.id])
+  })
+
   it('bounds delivered history without dropping an undelivered message', () => {
     const root = dirname(dirname(outboxes['pane-a']))
     const stateFile = join(root, 'state.json')
@@ -133,12 +280,24 @@ describe('persistent team channel', () => {
       text: 'deliver later',
       status: 'pending'
     })
+    state.messages.push({
+      id: 'unresolved',
+      fromId: 'pane-a',
+      toId: 'pane-c',
+      text: 'keep the draft after history is trimmed',
+      status: 'uncertain',
+      heldAt: 123
+    })
     fs.writeFileSync(stateFile, JSON.stringify(state))
     expect(ackTeamDelivery({ dir, teamId, id: 'waiting', toId: 'pane-a' }).ok).toBe(true)
     const saved = JSON.parse(fs.readFileSync(stateFile, 'utf8'))
-    expect(saved.messages).toHaveLength(2001)
+    expect(saved.messages).toHaveLength(2002)
     expect(saved.messages.some((m) => m.id === 'waiting')).toBe(true)
     expect(saved.messages.find((m) => m.id === 'offline')?.status).toBe('pending')
+    expect(pollTeamChannel({ dir, teamId }).held[0]).toMatchObject({
+      id: 'unresolved',
+      heldAt: 123
+    })
     expect(saved.messages.some((m) => m.id === 'old-0')).toBe(false)
   })
 })
