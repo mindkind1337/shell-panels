@@ -3271,7 +3271,13 @@ async function publishCurrentTeams() {
     for (const l of teamMembers(team.id)) if (l.kind === 'agent' && l.num) panes[l.id] = { team: team.id, num: l.num }
   }
   for (const dir of teamDirsSeen) {
-    await window.shellApi.team.current({ dir, panes: byDir[dir] || {} })
+    const cur = await window.shellApi.team.current({ dir, panes: byDir[dir] || {} })
+    // Retired by another Tessel window that did not know about it yet: set
+    // up again on the next round.
+    for (const id of (cur && cur.lost) || []) {
+      delete channelSigs[id]
+      delete channelBoxes[id]
+    }
     const res = await window.shellApi.team.retire({ dir, liveTeamIds: teams.value.filter((t) => channelDir(t) === dir).map((t) => t.id) })
     // A retired channel is set up again from scratch if its team comes back
     // (Undo after Ungroup): forget what this session knew about it.
