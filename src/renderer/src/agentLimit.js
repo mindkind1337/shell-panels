@@ -49,9 +49,12 @@ export function detectApproval(text) {
   return APPROVAL_PATTERNS.test(String(text || ''))
 }
 
-// An agent working on a task says it is finished with a line holding the
-// word TASK_COMPLETE (the task's instructions ask for it but spell it in two
-// parts, so the instructions on screen never count as the signal).
+// An agent working on a task says it is finished with a line that holds
+// only the word TASK_COMPLETE (an agent's bullet before it, a period after
+// it). The task's instructions spell it in two parts, and a sentence that
+// merely mentions it ("I will print TASK_COMPLETE when done") does not count.
 export function detectTaskDone(text) {
-  return /(^|[^A-Za-z_])TASK_COMPLETE([^A-Za-z_]|$)/.test(String(text || ''))
+  return String(text || '')
+    .split(/\r?\n/)
+    .some((line) => /^\s*(?:[●⏺•*>-]\s*)?TASK_COMPLETE\.?\s*$/.test(line))
 }

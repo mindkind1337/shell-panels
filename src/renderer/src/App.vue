@@ -2108,8 +2108,9 @@ function flushPending() {
     // A task for an agent that is still starting: wait until its first
     // screen is up and it is quiet.
     const first = pendingMessages[id][0]
-    if (first && first.meta && first.meta.notBefore) {
-      if (Date.now() < first.meta.notBefore || agentStatus[id] === 'busy') {
+    const m = first && first.meta
+    if (m && (m.notBefore || m.waitIdle)) {
+      if ((m.notBefore && Date.now() < m.notBefore) || agentStatus[id] === 'busy') {
         waiting = true
         continue
       }
@@ -2158,9 +2159,20 @@ const taskOpenAgents = computed(() =>
     agentId: l.agentId || null,
     accent: l.accent || null,
     state: paneState(l),
-    reset: limits[l.id] ? limits[l.id].reset : ''
+    reset: limits[l.id] ? limits[l.id].reset : '',
+    task: taskOfPane(l.id)?.title || null
   }))
 )
+
+// Why an open agent cannot take a new task now, or '' if it can.
+function busyReason(leaf) {
+  const t = taskOfPane(leaf.id)
+  if (t) return `already on "${t.title}"`
+  if (limits[leaf.id]) return 'at its usage limit'
+  if (approvals[leaf.id]) return 'waiting for your approval'
+  if (agentStatus[leaf.id] === 'busy') return 'working on something else'
+  return ''
+}
 
 // The task a pane is working on or waiting to have reviewed.
 function taskOfPane(paneId) {
@@ -2179,7 +2191,7 @@ function taskPrompt(task, ws) {
     `[Tessel task] ${task.title}\n\n` +
     (task.brief ? `${task.brief}\n\n` : '') +
     `${where}\n\n` +
-    'When the task is complete and checked, end your last message with a line made of the words TASK and COMPLETE joined by an underscore.'
+    'When the task is complete and checked, end your last message with a line that contains only the words TASK and COMPLETE joined by an underscore, and nothing else on that line.'
   )
 }
 
@@ -2194,6 +2206,12 @@ async function startTask(spec) {
   let fresh = false
   if (spec.agent.kind === 'pane') {
     leaf = findLeaf(spec.agent.id)
+    const why = leaf ? busyReason(leaf) : 'gone'
+    if (why) {
+      removeTask(task.id)
+      showToast(`${leaf ? leaf.title : 'That agent'} cannot take this task: ${why}.`, { kind: 'error', timeout: 7000 })
+      return
+    }
   } else {
     const agent = agentById(spec.agent.id)
     if (!agent) {
@@ -2277,7 +2295,14 @@ function agentReportedDone(paneId) {
     action: { label: 'Show', run: () => focusPane(paneId) }
   })
   // Optional second opinion from another agent.
-  if (task.reviewerId && findLeaf(task.reviewerId)) sendToPane(paneId, task.reviewerId, 'review')
+  const reviewer = task.reviewerId && findLeaf(task.reviewerId)
+  if (reviewer) {
+    deliverToAgent(reviewer.id, reviewPrompt(leaf, wsOfLeaf(paneId)), {
+      source: 'tessel',
+      scope: 'task',
+      waitIdle: true
+    })
+  }
 }
 
 // The agents (not plain shells) of a workspace.

@@ -62,3 +62,14 @@ describe('trust prompts and the task signal', () => {
     expect(detectTaskDone('MY_TASK_COMPLETED_FLAG')).toBe(false)
   })
 })
+
+describe('the task signal must stand alone on its line', () => {
+  it('ignores a sentence that mentions it', () => {
+    expect(detectTaskDone('I will print TASK_COMPLETE when finished.')).toBe(false)
+    expect(detectTaskDone('Next: tests, then TASK_COMPLETE')).toBe(false)
+  })
+  it('accepts it alone, with a bullet or a period', () => {
+    expect(detectTaskDone('Tests pass.\n⏺ TASK_COMPLETE')).toBe(true)
+    expect(detectTaskDone('  TASK_COMPLETE.  ')).toBe(true)
+  })
+})

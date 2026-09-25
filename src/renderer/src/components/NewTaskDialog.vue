@@ -29,11 +29,18 @@ const titleEl = ref(null)
 const isNew = computed(() => who.value.startsWith('new:'))
 const canIsolate = computed(() => isNew.value && props.isolation.available)
 const reviewers = computed(() =>
-  props.openAgents.filter((a) => `pane:${a.id}` !== who.value && a.state !== 'limited')
+  props.openAgents.filter((a) => `pane:${a.id}` !== who.value && a.state !== 'limited' && !a.task)
 )
 const ready = computed(() => title.value.trim() && who.value)
 
+// An open agent that is on a task, working, waiting or out of usage cannot
+// take a new one.
+function taken(a) {
+  return !!a.task || ['working', 'approval', 'limited'].includes(a.state)
+}
+
 function stateLabel(a) {
+  if (a.task) return `Busy: ${a.task}`
   if (a.state === 'limited') return a.reset ? `Usage limit · ${a.reset}` : 'Usage limit'
   if (a.state === 'working') return 'Busy'
   if (a.state === 'approval') return 'Waiting for your approval'
@@ -107,14 +114,14 @@ onMounted(() => nextTick(() => titleEl.value && titleEl.value.focus()))
           v-for="a in openAgents"
           :key="'pane:' + a.id"
           class="nt-agent"
-          :class="{ on: who === 'pane:' + a.id, off: a.state === 'limited' }"
+          :class="{ on: who === 'pane:' + a.id, off: taken(a) }"
         >
           <input
             v-model="who"
             type="radio"
             name="nt-who"
             :value="'pane:' + a.id"
-            :disabled="a.state === 'limited'"
+            :disabled="taken(a)"
           />
           <BrandIcon :kind="a.agentId" :accent="a.accent" :label="a.title" :size="18" />
           <span class="nt-agent-body">
