@@ -2103,6 +2103,7 @@ function flushPending() {
   for (const id of Object.keys(pendingMessages)) {
     const pane = getPane(id)
     if (!pane || !findLeaf(id)) {
+      for (const item of pendingMessages[id]) failDelivery(item)
       delete pendingMessages[id]
       continue
     }
@@ -2120,13 +2121,32 @@ function flushPending() {
         continue
       }
     }
-    const queue = pendingMessages[id]
-    delete pendingMessages[id]
+    // Messages that wait for a quiet agent go one at a time: each gets its
+    // own check (the previous one makes the agent busy again).
+    const queue = m && m.waitIdle ? pendingMessages[id].splice(0, 1) : pendingMessages[id].splice(0)
+    if (pendingMessages[id].length) waiting = true
+    else delete pendingMessages[id]
     queue.forEach((item, i) =>
       setTimeout(() => {
-        pane.paste(item.text)
+        // Checked again at paste time: the pane may be gone, or an approval
+        // prompt may have appeared since.
+        const p = getPane(id)
+        if (!p || !findLeaf(id)) return failDelivery(item)
+        if (awaitingApproval(id)) return requeueDelivery(id, item)
+        try {
+          p.paste(item.text)
+        } catch {
+          return failDelivery(item)
+        }
         setTimeout(() => {
-          pane.submit()
+          const q = getPane(id)
+          // Never press Enter into an approval prompt.
+          if (!q || awaitingApproval(id)) return failDelivery(item)
+          try {
+            q.submit()
+          } catch {
+            return failDelivery(item)
+          }
           if (item.meta && item.meta.onDelivered) item.meta.onDelivered()
         }, 500)
         if (item.held) logMessage(id, 'delivered', item.text, item.meta)
@@ -2135,6 +2155,17 @@ function flushPending() {
   }
   clearTimeout(pendingTimer)
   pendingTimer = waiting ? setTimeout(flushPending, 2000) : null
+}
+
+function failDelivery(item) {
+  if (item.meta && item.meta.onFailed) item.meta.onFailed()
+}
+
+function requeueDelivery(id, item) {
+  if (!pendingMessages[id]) pendingMessages[id] = []
+  pendingMessages[id].unshift(item)
+  clearTimeout(pendingTimer)
+  pendingTimer = setTimeout(flushPending, 2000)
 }
 
 // --- Tasks ------------------------------------------------------------------------
@@ -2873,9 +2904,16 @@ const channelQueued = new Set() // deliveries queued in this session
 
 // Keep the channel's members in step with the team; tell members about a new
 // outbox (except `quiet` ones, told another way).
+// The channel's folder is fixed the first time: the first member leaving or
+// moving to another workspace must not hide messages still waiting.
+function channelDir(team) {
+  if (!team.channelDir) team.channelDir = teamDir(team.id) || null
+  return team.channelDir
+}
+
 async function syncChannel(team, opts = {}) {
   if (!team || !window.shellApi.channel) return null
-  const dir = teamDir(team.id)
+  const dir = channelDir(team)
   if (!dir) return null
   const members = teamMembers(team.id).filter((l) => l.kind === 'agent' && l.num)
   const sig = members.map((m) => `${m.id}:${m.num}:${m.title}`).join('|')
@@ -2894,16 +2932,33 @@ async function syncChannel(team, opts = {}) {
   for (const m of members) {
     const box = boxes[m.id]
     if (!box || team.channelTold[m.id] === box.outbox) continue
+    const quiet = opts.quiet && opts.quiet.includes(m.id)
+    // Out of usage: tellAgents would skip it; tell it on a later round.
+    if (!quiet && limits[m.id]) continue
     team.channelTold[m.id] = box.outbox
-    if (opts.quiet && opts.quiet.includes(m.id)) continue
+    if (quiet) continue
     tellAgents([m], `[Tessel] Team "${team.name}": talk to your teammates directly through the team channel, not through the user.\n${box.guide}`, team.id)
   }
   for (const id of Object.keys(team.channelTold)) if (!boxes[id]) delete team.channelTold[id]
   return boxes
 }
 
+async function ackChannel(dir, teamId, d, key, tries = 0) {
+  let res = null
+  try {
+    res = await window.shellApi.channel.ack({ dir, teamId, id: d.id, toId: d.toId })
+  } catch {
+    res = null
+  }
+  if (res && res.ok) return
+  if (tries < 5) setTimeout(() => ackChannel(dir, teamId, d, key, tries + 1), 3000)
+  // Still failing: let a later poll deliver it again (a duplicate is better
+  // than a lost message).
+  else channelQueued.delete(key)
+}
+
 async function deliverChannel(team, members) {
-  const dir = teamDir(team.id)
+  const dir = channelDir(team)
   if (!dir || !window.shellApi.channel || !channelBoxes[team.id]) return
   const res = await window.shellApi.channel.poll({ dir, teamId: team.id, availableIds: members.map((m) => m.id) })
   if (!res || !res.ok) return
@@ -2925,7 +2980,8 @@ async function deliverChannel(team, members) {
       teamId: team.id,
       from: from ? from.title : null,
       waitIdle: true,
-      onDelivered: () => window.shellApi.channel.ack({ dir, teamId: team.id, id: d.id, toId: d.toId })
+      onDelivered: () => ackChannel(dir, team.id, d, key),
+      onFailed: () => channelQueued.delete(key)
     })
   }
 }
