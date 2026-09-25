@@ -1097,6 +1097,9 @@ button {
 /* ================= Workspace sidebar ================= */
 .ws-sidebar {
   flex: 0 0 216px;
+  /* Its width is the one dragged to: long names are cut (…), they never
+     hold it wider. */
+  min-width: 0;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -5290,7 +5293,12 @@ button.act-stat:hover,
   font-size: 11.5px;
 }
 
+/* Unread team messages: a small count next to the agent's name. */
 .ws-team-unread {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
   color: var(--accent);
   font-size: 10.5px;
   white-space: nowrap;
