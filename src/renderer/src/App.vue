@@ -190,12 +190,27 @@ function noteUserInput(id, data) {
   else if (s === '\x03' || s === '\x1b' || s === '\x15') setDraft(id, false)
   else if (/[^\x00-\x1f\x7f]/.test(s)) setDraft(id, true)
 }
-// Kept on the pane too (saved with the layout), so it survives a reload.
+// Recorded at once in this window's storage (before the key reaches the
+// terminal), so a reload right after a keystroke still knows it.
+const DRAFTS_KEY = 'tessel.userDrafts'
+function readDrafts() {
+  try {
+    return JSON.parse(localStorage.getItem(DRAFTS_KEY) || '{}') || {}
+  } catch {
+    return {}
+  }
+}
 function setDraft(id, on) {
   userDraft[id] = on
   delete draftUnknown[id]
-  const leaf = findLeaf(id)
-  if (leaf && !!leaf.userDraft !== on) leaf.userDraft = on
+  const all = readDrafts()
+  if (all[id] === on) return
+  all[id] = on
+  try {
+    localStorage.setItem(DRAFTS_KEY, JSON.stringify(all))
+  } catch {
+    // storage unavailable: the pane counts as unknown after a reload
+  }
 }
 function userIsTyping(id) {
   return !!userDraft[id] || Date.now() - (lastUserKey[id] || 0) < USER_QUIET_MS
@@ -533,8 +548,7 @@ function serializeNode(node) {
       startDir: node.startDir || null,
       num: node.num || null,
       team: node.team || null,
-      teamTools: !!node.teamTools,
-      userDraft: !!node.userDraft
+      teamTools: !!node.teamTools
     }
   }
   return {
@@ -572,8 +586,14 @@ async function deserializeNode(snap, cwd = null) {
     if (snap.teamTools) leaf.teamTools = true
     // Still running: its line is what was saved. Unknown (an older layout):
     // no automatic reminder until the user sends or clears a line there.
-    if (leaf.attached && snap.userDraft === true) setDraft(leaf.id, true)
-    else if (leaf.attached && snap.userDraft === undefined) draftUnknown[leaf.id] = true
+    // Still running: its line is what this window recorded; nothing
+    // recorded = unknown (no automatic reminder until the user sends or
+    // clears a line there). A new terminal starts with an empty line.
+    if (leaf.attached) {
+      const saved = readDrafts()[leaf.id]
+      if (saved === true) userDraft[leaf.id] = true
+      else if (saved !== false) draftUnknown[leaf.id] = true
+    }
     if (snap.title) leaf.title = snap.title
     leaf.broadcast = snap.broadcast !== false
     if (typeof snap.team === 'string') leaf.team = snap.team
@@ -2402,7 +2422,7 @@ function flushPending() {
         } else {
           failDelivery(item)
         }
-        flushPending()
+        if (result !== 'requeue') flushPending()
       })
   }
   clearTimeout(pendingTimer)
