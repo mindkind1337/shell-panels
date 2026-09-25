@@ -188,3 +188,38 @@ describe('scopes and visibility', () => {
     expect(onlyClaude.approvalWait.count).toBe(0)
   })
 })
+
+describe('tasks in the timeline', () => {
+  it('shows a task started and finished, in its workspace only', () => {
+    const ev = [
+      st(0, 'p1', 'working', claude, { wsId: 'w1' }),
+      { t: T0 + MIN, type: 'task', action: 'started', taskId: 'k1', title: 'Fix login', paneId: 'p1', agent: claude, wsId: 'w1', branch: 'agent/fix-login' },
+      { t: T0 + 9 * MIN, type: 'task', action: 'review', taskId: 'k1', title: 'Fix login', paneId: 'p1', agent: claude, wsId: 'w1' }
+    ]
+    const here = summarize(ev, { now: T0 + 10 * MIN, from: T0 - MIN, wsId: 'w1' })
+    expect(here.timeline.filter((x) => x.kind === 'task').map((x) => x.action)).toEqual(['review', 'started'])
+    expect(here.timeline.find((x) => x.action === 'started').branch).toBe('agent/fix-login')
+    const other = summarize(ev, { now: T0 + 10 * MIN, from: T0 - MIN, wsId: 'w2' })
+    expect(other.timeline.filter((x) => x.kind === 'task')).toHaveLength(0)
+  })
+})
+
+describe('timeline row keys', () => {
+  it('gives every row its own key, even for look-alike rows', () => {
+    const ev = [
+      { t: T0, type: 'message', paneId: 'p1', agent: claude, status: 'sent', source: 'you', scope: 'team', preview: 'first' },
+      { t: T0, type: 'message', paneId: 'p1', agent: claude, status: 'sent', source: 'tessel', scope: 'team-change', preview: 'second' }
+    ]
+    const journal = parseJournal(`## Journal
+- 2026-09-24 Codex: one.
+- 2026-09-24 Codex: two.
+`)
+    const s = summarize(ev, { now: T0 + MIN, from: Date.parse('2026-09-20T00:00:00Z'), journal })
+    const keys = s.timeline.map((x) => x.key)
+    expect(keys).toHaveLength(4)
+    expect(new Set(keys).size).toBe(4)
+    // Stable: the same log gives the same keys.
+    const again = summarize(ev, { now: T0 + MIN, from: Date.parse('2026-09-20T00:00:00Z'), journal })
+    expect(again.timeline.map((x) => x.key)).toEqual(keys)
+  })
+})

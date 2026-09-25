@@ -18,6 +18,8 @@ const props = defineProps({
   agentPanes: { type: Array, default: () => [] }
 })
 
+const emit = defineEmits(['focus-pane'])
+
 const colIndex = computed(() => COLUMNS.indexOf(props.task.column))
 const canPrev = computed(() => colIndex.value > 0)
 const canNext = computed(() => colIndex.value > -1 && colIndex.value < COLUMNS.length - 1)
@@ -115,7 +117,20 @@ function paneLabel(pane) {
       <span v-else class="task-assignee unassigned" data-test="assignee">Unassigned</span>
     </div>
 
+    <div v-if="task.worktree || task.brief" class="task-card-extra">
+      <span v-if="task.worktree" class="task-branch" :title="task.worktree.path">{{ task.worktree.branch }}</span>
+      <span v-if="task.brief" class="task-brief" :title="task.brief">{{ task.brief }}</span>
+    </div>
+
     <div class="task-card-actions">
+      <button
+        v-if="assignedPane && (task.column === 'doing' || task.column === 'review')"
+        class="task-btn"
+        title="Go to the agent doing this task"
+        @click="emit('focus-pane', task.paneId)"
+      >
+        Show agent
+      </button>
       <button
         class="task-btn"
         title="Move to previous column"

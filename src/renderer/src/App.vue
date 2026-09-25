@@ -28,8 +28,9 @@ import { activity, recordActivity, loadActivity, saveActivityNow } from './activ
 import ActivityPanel from './components/ActivityPanel.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import NotesPanel from './components/NotesPanel.vue'
+import NewTaskDialog from './components/NewTaskDialog.vue'
 import { dropBuffer, seedBuffer } from './ptyStore'
-import { tasks as boardTasks, setTasks, updateTask, removeTask } from './taskBoardStore'
+import { tasks as boardTasks, setTasks, updateTask, removeTask, addTask } from './taskBoardStore'
 
 const shells = ref([])
 const agents = ref([])
@@ -784,7 +785,7 @@ function scheduleTaskSave() {
   if (taskSaveTimer) clearTimeout(taskSaveTimer)
   taskSaveTimer = setTimeout(() => {
     taskSaveTimer = null
-    window.shellApi.taskBoard.save(boardTasks.map((t) => ({ ...t })))
+    window.shellApi.taskBoard.save(JSON.parse(JSON.stringify(boardTasks)))
   }, 500)
 }
 
@@ -821,7 +822,7 @@ async function installUpdate() {
     clearTimeout(taskSaveTimer)
     taskSaveTimer = null
     try {
-      await window.shellApi.taskBoard.save(boardTasks.map((t) => ({ ...t })))
+      await window.shellApi.taskBoard.save(JSON.parse(JSON.stringify(boardTasks)))
     } catch {
       /* best-effort */
     }
@@ -883,6 +884,8 @@ provide('panelCtx', {
   voiceName,
   teamById,
   leaveTeam,
+  taskOfPane,
+  agentReportedDone,
   copied: (what) => showToast(`${what} copied.`, { timeout: 2000 })
 })
 
@@ -968,6 +971,7 @@ function buildCommands() {
     }
   )
 
+  add('Task', 'New task…', openNewTask, { hint: 'Give an agent a task, in its own copy of the project' })
   if (currentWs.value) {
     const wsId = currentWs.value.id
     add('Workspace', 'Message every agent in this workspace', () => startWsMessage(wsId), {
@@ -2101,6 +2105,15 @@ function flushPending() {
       waiting = true
       continue
     }
+    // A task for an agent that is still starting: wait until its first
+    // screen is up and it is quiet.
+    const first = pendingMessages[id][0]
+    if (first && first.meta && first.meta.notBefore) {
+      if (Date.now() < first.meta.notBefore || agentStatus[id] === 'busy') {
+        waiting = true
+        continue
+      }
+    }
     const queue = pendingMessages[id]
     delete pendingMessages[id]
     queue.forEach((item, i) =>
@@ -2113,6 +2126,158 @@ function flushPending() {
   }
   clearTimeout(pendingTimer)
   pendingTimer = waiting ? setTimeout(flushPending, 2000) : null
+}
+
+// --- Tasks ------------------------------------------------------------------------
+// A task is a card of the workspace's board: title, instructions, the agent
+// pane doing it (paneId), and its own copy of the project when it has one
+// (worktree: { path, branch, baseBranch, root }). Columns: todo, doing,
+// review, done.
+const newTaskOpen = ref(false)
+
+async function openNewTask() {
+  closeMenus()
+  if (!currentWs.value) return
+  await checkWorktree()
+  newTaskOpen.value = true
+}
+
+// Agent kinds that can be started, for the dialog.
+const taskAgentKinds = computed(() =>
+  agents.value
+    .filter((a) => a.available !== false)
+    .map((a) => ({ id: a.id, name: a.name, accent: a.accent || null }))
+)
+
+// Agents already open in this workspace, for the dialog.
+const taskOpenAgents = computed(() =>
+  (currentWs.value ? wsAgents(currentWs.value.id) : []).map((l) => ({
+    id: l.id,
+    num: l.num || 0,
+    title: l.title || 'Agent',
+    agentId: l.agentId || null,
+    accent: l.accent || null,
+    state: paneState(l),
+    reset: limits[l.id] ? limits[l.id].reset : ''
+  }))
+)
+
+// The task a pane is working on or waiting to have reviewed.
+function taskOfPane(paneId) {
+  if (!paneId) return null
+  return boardTasks.find((t) => t.paneId === paneId && (t.column === 'doing' || t.column === 'review')) || null
+}
+
+function taskPrompt(task, ws) {
+  const wt = task.worktree
+  const where = wt
+    ? `You work in your own copy of the project: ${wt.path} (git branch ${wt.branch}, made from ${wt.baseBranch || 'the main branch'}). ` +
+      'Commit your work on that branch (git add the files you changed, then git commit). Do not merge it and do not push: the user reviews and merges it. ' +
+      'If the project needs its dependencies installed, install them in this copy (for example npm ci); never link them to another folder.'
+    : `You work directly in the project folder ${(ws && ws.cwd) || ''}. Other agents may work there too: check .tessel/notes.md before editing shared files.`
+  return (
+    `[Tessel task] ${task.title}\n\n` +
+    (task.brief ? `${task.brief}\n\n` : '') +
+    `${where}\n\n` +
+    'When the task is complete and checked, end your last message with a line made of the words TASK and COMPLETE joined by an underscore.'
+  )
+}
+
+async function startTask(spec) {
+  newTaskOpen.value = false
+  const ws = currentWs.value
+  if (!ws || !spec || !spec.title) return
+  const task = addTask({ title: spec.title, wsId: ws.id })
+  updateTask(task.id, { brief: spec.brief || '', column: 'doing', reviewerId: spec.reviewerId || null, startedAt: Date.now() })
+
+  let leaf = null
+  let fresh = false
+  if (spec.agent.kind === 'pane') {
+    leaf = findLeaf(spec.agent.id)
+  } else {
+    const agent = agentById(spec.agent.id)
+    if (!agent) {
+      showToast('That agent is not available.', { kind: 'error' })
+      return
+    }
+    let worktree = null
+    if (spec.isolated) {
+      const res = await window.shellApi.createWorktree(ws.cwd, spec.title)
+      if (!res || !res.ok) {
+        updateTask(task.id, { column: 'todo' })
+        showToast(`Could not make a separate copy: ${(res && res.error) || 'unknown error'}. The task stays in To do.`, {
+          kind: 'error',
+          timeout: 9000
+        })
+        return
+      }
+      worktree = { path: res.path, branch: res.branch, baseBranch: res.baseBranch || null, root: res.root || ws.cwd }
+      updateTask(task.id, { worktree })
+    }
+    const target = ws.activeId && findLeaf(ws.activeId) ? ws.activeId : null
+    leaf = target
+      ? await splitLeaf(target, 'row', agent, selectedShell.value, worktree)
+      : await createLeaf(selectedShell.value, agent, ws.cwd, worktree)
+    if (leaf && !target) {
+      ws.tree = leaf
+      ws.activeId = leaf.id
+    }
+    fresh = true
+  }
+  if (!leaf) {
+    updateTask(task.id, { column: 'todo' })
+    showToast('Could not start the agent. The task stays in To do.', { kind: 'error' })
+    return
+  }
+  updateTask(task.id, { paneId: leaf.id })
+  const t = boardTasks.find((x) => x.id === task.id)
+  recordActivity({
+    type: 'task',
+    action: 'started',
+    taskId: task.id,
+    title: task.title,
+    paneId: leaf.id,
+    agent: agentInfo(leaf),
+    wsId: ws.id,
+    branch: t.worktree ? t.worktree.branch : null
+  })
+  deliverToAgent(leaf.id, taskPrompt(t, ws), {
+    source: 'tessel',
+    scope: 'task',
+    // A new agent needs a moment to start (and may ask to trust the folder).
+    notBefore: fresh ? Date.now() + 6000 : 0
+  })
+  if (!taskPanelOpen.value) toggleTaskPanel()
+  showToast(
+    t.worktree
+      ? `${leaf.title} started "${task.title}" on branch ${t.worktree.branch}.`
+      : `${leaf.title} started "${task.title}".`,
+    { timeout: 5000 }
+  )
+}
+
+// An agent printed the task signal: its card goes to Review.
+function agentReportedDone(paneId) {
+  const task = boardTasks.find((t) => t.paneId === paneId && t.column === 'doing')
+  if (!task) return
+  const leaf = findLeaf(paneId)
+  updateTask(task.id, { column: 'review', doneAt: Date.now() })
+  recordActivity({
+    type: 'task',
+    action: 'review',
+    taskId: task.id,
+    title: task.title,
+    paneId,
+    agent: agentInfo(leaf),
+    wsId: task.wsId
+  })
+  showToast(`${leaf ? leaf.title : 'An agent'} finished "${task.title}". It is ready for your review.`, {
+    kind: 'attention',
+    timeout: 10000,
+    action: { label: 'Show', run: () => focusPane(paneId) }
+  })
+  // Optional second opinion from another agent.
+  if (task.reviewerId && findLeaf(task.reviewerId)) sendToPane(paneId, task.reviewerId, 'review')
 }
 
 // The agents (not plain shells) of a workspace.
@@ -2565,6 +2730,8 @@ const sessionItems = computed(() => {
       reset: limits[leaf.id] ? limits[leaf.id].reset : '',
       held: !!pendingMessages[leaf.id],
       team: leaf.team || null,
+      task: taskOfPane(leaf.id)?.title || null,
+      review: taskOfPane(leaf.id)?.column === 'review',
       active: leaf.id === activeId.value
     })
   })
@@ -3176,6 +3343,7 @@ onBeforeUnmount(() => {
         @focus-pane="focusPane"
         @message-ws="messageWorkspace"
         @notes-ws="openNotesView"
+        @new-task="openNewTask"
         @select="selectWorkspace"
         @create="createWorkspace"
         @rename="renameWorkspace"
@@ -3200,7 +3368,12 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <aside v-if="taskPanelOpen" class="task-panel">
-        <TaskBoard :agent-panes="agentPanes" :workspace-id="currentWsId" />
+        <TaskBoard
+          :agent-panes="agentPanes"
+          :workspace-id="currentWsId"
+          @new-task="openNewTask"
+          @focus-pane="focusPane"
+        />
       </aside>
     </div>
 
@@ -3313,6 +3486,17 @@ onBeforeUnmount(() => {
       :confirm-label="confirmState.confirmLabel || 'OK'"
       :danger="!!confirmState.danger"
       @answer="answerConfirm"
+    />
+
+    <NewTaskDialog
+      v-if="newTaskOpen"
+      :ws-name="currentWs ? currentWs.name : ''"
+      :cwd="currentWs && currentWs.cwd ? currentWs.cwd : ''"
+      :agent-kinds="taskAgentKinds"
+      :open-agents="taskOpenAgents"
+      :isolation="worktreeState"
+      @start="startTask"
+      @close="newTaskOpen = false"
     />
 
     <NotesPanel

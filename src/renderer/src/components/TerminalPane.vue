@@ -24,7 +24,7 @@ import {
   setApproval,
   approvals
 } from '../agentStatus'
-import { detectLimit, detectApproval } from '../agentLimit'
+import { detectLimit, detectApproval, detectTaskDone } from '../agentLimit'
 
 const props = defineProps({
   node: { type: Object, required: true }
@@ -91,6 +91,10 @@ function markActivity() {
     }
     // Working again for real: whatever limit it had is over.
     if (worked >= ATTENTION_AFTER_MS) clearLimit(props.node.id)
+    // A task it was given is finished (it printed the task signal).
+    if (worked >= ATTENTION_AFTER_MS && detectTaskDone(screen) && ctx.agentReportedDone) {
+      ctx.agentReportedDone(props.node.id)
+    }
     const lookingHere = isActive.value && document.hasFocus()
     if (worked >= ATTENTION_AFTER_MS && !lookingHere) {
       setAttention(props.node.id)
@@ -117,6 +121,8 @@ const needsYou = computed(() => !!attention[props.node.id])
 const limit = computed(() => limits[props.node.id] || null)
 
 const asksApproval = computed(() => !!approvals[props.node.id])
+// The task this agent is doing (or waiting to have reviewed), if any.
+const task = computed(() => (ctx.taskOfPane ? ctx.taskOfPane(props.node.id) : null))
 
 // The team this pane is in (a named, coloured group of agents), if any.
 // (Checked: in the dev build this file can reload before App.vue provides it.)
@@ -953,6 +959,13 @@ onBeforeUnmount(() => {
           </svg>
           {{ node.worktree.branch }}
         </span>
+        <span
+          v-if="task"
+          class="pane-task"
+          :class="task.column"
+          :title="`Task: ${task.title}${task.worktree ? ` (branch ${task.worktree.branch})` : ''}`"
+          >{{ task.column === 'review' ? 'To review: ' : '' }}{{ task.title }}</span
+        >
         <span
           v-if="team"
           class="pane-team"

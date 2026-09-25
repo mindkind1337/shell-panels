@@ -23,6 +23,7 @@ const PERIODS = [
   { value: '30d', label: '30 days', ms: 30 * 24 * 3600 * 1000 }
 ]
 const TYPES = [
+  { value: 'task', label: 'Tasks' },
   { value: 'message', label: 'Messages' },
   { value: 'approval', label: 'Approvals' },
   { value: 'limit', label: 'Limits' },
@@ -47,7 +48,7 @@ function toggleRow(key) {
   openRows.value = next
 }
 
-const rowKey = (x) => `${x.t}:${x.kind}:${x.paneId || x.author || x.name || ''}`
+const rowKey = (x) => x.key
 const agentFilter = ref('')
 const typeFilter = ref(new Set(TYPES.map((t) => t.value)))
 const stateFilter = ref(null) // from the cards: 'approval' | 'working'
@@ -166,6 +167,10 @@ function describe(x) {
             : 'sent'
       return { who, text: `→ ${x.title}${to}: “${x.preview}”`, note: how }
     }
+    case 'task':
+      return x.action === 'review'
+        ? { who: x.title, text: `finished the task “${x.task}”`, note: 'ready for your review' }
+        : { who: x.title, text: `started the task “${x.task}”`, note: x.branch ? `branch ${x.branch}` : '' }
     case 'approval':
       return { who: x.title, text: 'asked for your approval', note: '' }
     case 'approval-end':

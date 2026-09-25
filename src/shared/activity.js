@@ -12,6 +12,7 @@
 //                    source: 'you' | 'tessel'; scope: 'team' | 'workspace' | 'notes'
 //                    | 'team-change' | 'task'; teamId?, wsId?, preview
 //   agent.team       teamId (null: no team): the pane joined or left a team
+//   task             action: 'started' | 'review'; taskId, title, wsId, branch?
 //   team             action: 'created' | 'renamed' | 'left' | 'closed' | 'ungrouped'
 //                    teamId, wsId, name, detail?
 // agent.state and agent.team carry the pane's teamId and wsId at that time.
@@ -137,7 +138,13 @@ export function summarize(events, opts = {}) {
     }
   }
 
-  for (const e of sorted) {
+  // Every timeline row gets a key of its own: the event's place in the log
+  // (the log only grows at the end, so keys stay the same between renders).
+  let evIndex = 0
+  const push = (item) => timeline.push({ ...item, key: `e${evIndex}:${item.kind}` })
+
+  for (const [ei, e] of sorted.entries()) {
+    evIndex = ei
     if (e.t > now) continue
     const id = e.paneId
     const inPeriod = e.t >= from
@@ -155,23 +162,23 @@ export function summarize(events, opts = {}) {
         if (prev.state === 'approval' && state !== 'approval') {
           r.waits.push(e.t - prev.since)
           visible.add(id)
-          timeline.push({ t: e.t, kind: 'approval-end', paneId: id, title: r.title, agentId: r.agentId, waited: e.t - prev.since })
+          push({ t: e.t, kind: 'approval-end', paneId: id, title: r.title, agentId: r.agentId, waited: e.t - prev.since })
         }
         if (prev.state === 'limited' && state !== 'limited') {
           visible.add(id)
-          timeline.push({ t: e.t, kind: 'limit-end', paneId: id, title: r.title, agentId: r.agentId })
+          push({ t: e.t, kind: 'limit-end', paneId: id, title: r.title, agentId: r.agentId })
         }
       }
       if (e.type === 'agent.state' && is && inPeriod) {
         if (state === 'approval' && prev?.state !== 'approval') {
           r.approvals++
           visible.add(id)
-          timeline.push({ t: e.t, kind: 'approval', paneId: id, title: r.title, agentId: r.agentId })
+          push({ t: e.t, kind: 'approval', paneId: id, title: r.title, agentId: r.agentId })
         }
         if (state === 'limited' && prev?.state !== 'limited') {
           r.limits++
           visible.add(id)
-          timeline.push({ t: e.t, kind: 'limit', paneId: id, title: r.title, agentId: r.agentId, reset: e.reset || '' })
+          push({ t: e.t, kind: 'limit', paneId: id, title: r.title, agentId: r.agentId, reset: e.reset || '' })
         }
         if (state === 'working' || state === 'approval') {
           r.lastActivity = e.t
@@ -198,7 +205,7 @@ export function summarize(events, opts = {}) {
       if (e.status === 'skipped') r.skipped++
       r.lastActivity = Math.max(r.lastActivity || 0, e.t)
       if (e.status !== 'delivered') {
-        timeline.push({
+        push({
           t: e.t,
           kind: 'message',
           paneId: id,
@@ -214,9 +221,30 @@ export function summarize(events, opts = {}) {
       continue
     }
 
+    if (e.type === 'task' && inPeriod) {
+      const c = id ? cur.get(id) : null
+      const inScope = opts.teamId ? !!c && c.team === opts.teamId : opts.wsId ? e.wsId === opts.wsId : true
+      if (!inScope) continue
+      if (id) {
+        const r = row(id, e.agent)
+        r.lastActivity = Math.max(r.lastActivity || 0, e.t)
+        visible.add(id)
+      }
+      push({
+        t: e.t,
+        kind: 'task',
+        action: e.action,
+        paneId: id || null,
+        title: e.agent ? e.agent.title : 'Agent',
+        task: e.title || '',
+        branch: e.branch || ''
+      })
+      continue
+    }
+
     if (e.type === 'team' && inPeriod) {
       if (opts.teamId ? e.teamId !== opts.teamId : opts.wsId ? e.wsId !== opts.wsId : false) continue
-      timeline.push({ t: e.t, kind: 'team', action: e.action, name: e.name, detail: e.detail || '' })
+      push({ t: e.t, kind: 'team', action: e.action, name: e.name, detail: e.detail || '' })
     }
   }
 
@@ -242,9 +270,9 @@ export function summarize(events, opts = {}) {
 
   // Journal entries of the shared notes, by author.
   const journal = (opts.journal || []).filter((j) => Date.parse(j.date + 'T23:59:59') >= from)
-  for (const j of journal) {
+  for (const [k, j] of journal.entries()) {
     for (const id of visible) if (authorMatches(j.author, stats.get(id))) stats.get(id).journal++
-    timeline.push({ t: Date.parse(j.date + 'T12:00:00'), day: j.date, kind: 'journal', author: j.author, preview: j.text })
+    timeline.push({ key: `j${k}`, t: Date.parse(j.date + 'T12:00:00'), day: j.date, kind: 'journal', author: j.author, preview: j.text })
   }
 
   const rows = [...visible]

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { detectLimit, detectApproval } from '../agentLimit'
+import { detectLimit, detectApproval, detectTaskDone } from '../agentLimit'
 
 describe('detectLimit', () => {
   it('spots Codex hitting its limit and the reset time', () => {
@@ -46,5 +46,19 @@ describe('detectApproval', () => {
   it('ignores ordinary output', () => {
     expect(detectApproval('Ran npm test: 120 passed')).toBe(false)
     expect(detectApproval('')).toBe(false)
+  })
+})
+
+describe('trust prompts and the task signal', () => {
+  it('treats a "do you trust this folder" screen as an approval', () => {
+    expect(detectApproval('Do you trust the files in this folder?\n❯ 1. Yes, proceed')).toBe(true)
+    expect(detectApproval('Do you trust the contents of this directory?')).toBe(true)
+  })
+
+  it('spots TASK_COMPLETE, not the instruction that spells it in parts', () => {
+    expect(detectTaskDone('All tests pass.\nTASK_COMPLETE')).toBe(true)
+    expect(detectTaskDone('● TASK_COMPLETE.')).toBe(true)
+    expect(detectTaskDone('end with the words TASK and COMPLETE joined by an underscore')).toBe(false)
+    expect(detectTaskDone('MY_TASK_COMPLETED_FLAG')).toBe(false)
   })
 })

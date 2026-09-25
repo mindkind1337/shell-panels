@@ -24,6 +24,7 @@ const emit = defineEmits([
   'message-ws',
   'notes-ws',
   'create-team',
+  'new-task',
   'add-to-team',
   'rename-team',
   'disband-team',
@@ -145,6 +146,7 @@ const STATE_TEXT = {
 
 function stateText(m) {
   if (m.kind && m.kind !== 'agent') return 'Terminal'
+  if (m.review) return `Ready for review: ${m.task}`
   if (m.held) return 'Message waits for your approval'
   if (m.state === 'limited' && m.reset) return `Usage limit · ${m.reset}`
   return STATE_TEXT[m.state]
@@ -649,6 +651,9 @@ defineExpose({
         @pointerdown.stop
       >
         <template v-if="menu.kind === 'sessions'">
+          <button class="ctx-menu-item" role="menuitem" @click="pick(() => emit('new-task'))">
+            New task…
+          </button>
           <button
             class="ctx-menu-item"
             role="menuitem"

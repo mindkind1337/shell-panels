@@ -18,6 +18,7 @@ const props = defineProps({
   workspaceId: { type: String, default: null }
 })
 
+const emit = defineEmits(['new-task', 'focus-pane'])
 const newTitle = ref('')
 
 // One pass over tasks → { todo: [...], doing: [...], ... }. Reads only each
@@ -47,6 +48,16 @@ function columnLabel(column) {
 
 <template>
   <div class="task-board">
+    <div class="task-board-head">
+      <button
+        class="task-board-new"
+        type="button"
+        title="Give a task to an agent, in its own copy of the project"
+        @click="emit('new-task')"
+      >
+        New task…
+      </button>
+    </div>
     <form class="task-board-add" data-test="add-task-form" @submit.prevent="onAdd">
       <input
         v-model="newTitle"
@@ -76,6 +87,7 @@ function columnLabel(column) {
             :key="task.id"
             :task="task"
             :agent-panes="agentPanes"
+            @focus-pane="(id) => emit('focus-pane', id)"
           />
           <p v-if="!grouped[column].length" class="task-column-empty">No tasks</p>
         </div>
