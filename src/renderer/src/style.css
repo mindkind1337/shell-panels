@@ -876,6 +876,22 @@ button {
 
 .task-column {
   padding-top: 10px;
+  border-radius: var(--radius);
+  transition: background 0.12s;
+}
+
+/* A card dragged over this column. */
+.task-column.drop-here {
+  background: color-mix(in srgb, var(--col, var(--accent)) 12%, transparent);
+  outline: 1px dashed color-mix(in srgb, var(--col, var(--accent)) 60%, transparent);
+}
+
+.task-card[draggable='true'] {
+  cursor: grab;
+}
+
+.task-card.dragging {
+  opacity: 0.45;
 }
 
 .task-column[data-column='todo'] {

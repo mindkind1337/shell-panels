@@ -24,6 +24,16 @@ const colIndex = computed(() => COLUMNS.indexOf(props.task.column))
 const canPrev = computed(() => colIndex.value > 0)
 const canNext = computed(() => colIndex.value > -1 && colIndex.value < COLUMNS.length - 1)
 
+// Drag a card to another column (the arrows stay, for the keyboard).
+const TASK_DRAG_TYPE = 'application/x-tessel-task' // same type in TaskBoard.vue
+const dragging = ref(false)
+function onDragStart(e) {
+  if (editing.value || !e.dataTransfer) return e.preventDefault()
+  e.dataTransfer.setData(TASK_DRAG_TYPE, props.task.id)
+  e.dataTransfer.effectAllowed = 'move'
+  dragging.value = true
+}
+
 function movePrev() {
   if (canPrev.value) moveTask(props.task.id, COLUMNS[colIndex.value - 1])
 }
@@ -77,7 +87,15 @@ function paneLabel(pane) {
 </script>
 
 <template>
-  <div class="task-card" data-test="task-card">
+  <div
+    class="task-card"
+    :class="{ dragging }"
+    data-test="task-card"
+    :draggable="!editing"
+    title="Drag to another column"
+    @dragstart="onDragStart"
+    @dragend="dragging = false"
+  >
     <div class="task-card-top">
       <input
         v-if="editing"

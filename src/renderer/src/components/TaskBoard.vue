@@ -7,7 +7,7 @@
 
 import { ref, computed } from 'vue'
 import { COLUMNS } from '../../../shared/taskModel'
-import { tasks, addTask } from '../taskBoardStore'
+import { tasks, addTask, moveTask } from '../taskBoardStore'
 import TaskCard from './TaskCard.vue'
 
 const props = defineProps({
@@ -39,6 +39,31 @@ function onAdd() {
   if (!title) return
   addTask({ title, wsId: props.workspaceId })
   newTitle.value = ''
+}
+
+// Dropping a dragged card (TaskCard) on a column moves it there.
+const TASK_DRAG_TYPE = 'application/x-tessel-task'
+const dropColumn = ref(null)
+function isTaskDrag(e) {
+  return !!e.dataTransfer && [...e.dataTransfer.types].includes(TASK_DRAG_TYPE)
+}
+function onDragOver(e, column) {
+  if (!isTaskDrag(e)) return
+  e.preventDefault()
+  e.dataTransfer.dropEffect = 'move'
+  dropColumn.value = column
+}
+function onDragLeave(e, column) {
+  // Only when the pointer really leaves the column (not into one of its cards).
+  if (dropColumn.value === column && !e.currentTarget.contains(e.relatedTarget)) dropColumn.value = null
+}
+function onDrop(e, column) {
+  dropColumn.value = null
+  if (!isTaskDrag(e)) return
+  e.preventDefault()
+  const id = e.dataTransfer.getData(TASK_DRAG_TYPE)
+  const task = tasks.find((t) => t.id === id)
+  if (task && task.column !== column) moveTask(id, column)
 }
 
 function columnLabel(column) {
@@ -74,8 +99,12 @@ function columnLabel(column) {
         v-for="column in COLUMNS"
         :key="column"
         class="task-column"
+        :class="{ 'drop-here': dropColumn === column }"
         data-test="column"
         :data-column="column"
+        @dragover="(e) => onDragOver(e, column)"
+        @dragleave="(e) => onDragLeave(e, column)"
+        @drop="(e) => onDrop(e, column)"
       >
         <header class="task-column-head">
           <span class="task-column-title">{{ columnLabel(column) }}</span>
