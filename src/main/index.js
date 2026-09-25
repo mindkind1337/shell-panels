@@ -385,9 +385,12 @@ function layoutFile() {
 // The layout survives a kill mid-write: saved through a temp file (the
 // previous copy kept as .bak), and a damaged file falls back to that copy
 // instead of starting over with an empty grid.
+// A saved layout is an object (null, a number or a list is damage).
+const isLayout = (d) => !!d && typeof d === 'object' && !Array.isArray(d)
+
 ipcMain.handle('layout:load', () => {
   try {
-    const res = readJsonSafe(layoutFile())
+    const res = readJsonSafe(layoutFile(), isLayout)
     if (res.corrupt) logCrashContext(`layout:load: damaged layout kept as ${res.corrupt}`)
     if (res.from === 'backup') log.warn('app', 'layout: restored from the previous copy (the file was damaged)')
     return res.data
@@ -399,7 +402,7 @@ ipcMain.handle('layout:load', () => {
 
 ipcMain.on('layout:save', (_evt, data) => {
   try {
-    writeJsonSafe(layoutFile(), data)
+    writeJsonSafe(layoutFile(), data, isLayout)
   } catch {
     /* best-effort: a failed save just means last layout is reused next launch */
   }
