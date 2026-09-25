@@ -4,6 +4,7 @@
 //   <project>/.tessel/team-channel/<team>/notices.json   Tessel's own notices
 //     to an agent (team changes, answers to a lead), read once like messages
 import fs from 'fs'
+import crypto from 'crypto'
 import { join, resolve, isAbsolute } from 'path'
 import { ensureTeamChannel } from './teamChannel'
 
@@ -15,10 +16,27 @@ function base(dir) {
   return join(resolve(dir), '.tessel', 'team-channel')
 }
 
+// On Windows the rename fails for a moment while another process (a team
+// tool reading the file, an antivirus scan) has the file open: tried again.
 function writeAtomic(file, data) {
   const tmp = `${file}.${process.pid}.tmp`
   fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8')
-  fs.renameSync(tmp, file)
+  for (let i = 0; ; i++) {
+    try {
+      fs.renameSync(tmp, file)
+      return
+    } catch (err) {
+      if (i >= 20 || !['EPERM', 'EBUSY', 'EACCES'].includes(err.code)) {
+        try {
+          fs.unlinkSync(tmp)
+        } catch {
+          // nothing left to clean
+        }
+        throw err
+      }
+      sleepSync(25)
+    }
+  }
 }
 
 function readJson(file) {
@@ -38,41 +56,99 @@ function readJson(file) {
 // that window wrote in the last 5 minutes. A window retires only its own
 // teams (a team of unknown origin only when no other window runs). Every
 // read-modify-write of current.json, and retiring, happens under a lock file
-// shared by the processes, so no window's update is lost.
+// shared by the processes (withTeamLock), so no window's update is lost.
 const OWNER_GONE_MS = 5 * 60 * 1000
 const OWNER_TOUCH_MS = 60 * 1000
-const LOCK_STALE_MS = 10000
 const LOCK_WAIT_MS = 3000
+// A lock file left empty (its process died between creating and writing it).
+const LOCK_EMPTY_STALE_MS = 10000
 
 function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }
 
-// Run fn() holding <base>/current.lock (made with exclusive create). A lock
-// left by a crashed process is taken over after 10 s.
-function withLock(b, fn) {
+// The lock file holds "<pid>:<random token>". It is taken over only when
+// the process that holds it no longer runs (not because it is old: a live
+// process may just be slow), and only its holder removes it.
+function holderGone(lock, text) {
+  if (!text) {
+    try {
+      return Date.now() - fs.statSync(lock).mtimeMs > LOCK_EMPTY_STALE_MS
+    } catch {
+      return false
+    }
+  }
+  const pid = Number.parseInt(text.split(':')[0], 10)
+  if (!Number.isInteger(pid) || pid <= 0) return true
+  if (pid === process.pid) return false
+  try {
+    process.kill(pid, 0)
+    return false
+  } catch (err) {
+    return err.code === 'ESRCH'
+  }
+}
+
+// Remove a dead holder's lock, and only that one: moved aside first, and
+// put back if another process replaced it meanwhile.
+function takeOver(lock, text, token) {
+  const aside = `${lock}.${token.replace(':', '-')}.old` // no ":" in a Windows file name
+  try {
+    fs.renameSync(lock, aside)
+  } catch {
+    return
+  }
+  let moved = null
+  try {
+    moved = fs.readFileSync(aside, 'utf8')
+  } catch {
+    // unreadable: treated as someone else's
+  }
+  if (moved !== text) {
+    try {
+      fs.linkSync(aside, lock) // back in place, unless a new lock is there
+    } catch {
+      // a new lock is there already
+    }
+  }
+  try {
+    fs.unlinkSync(aside)
+  } catch {
+    // already gone
+  }
+}
+
+// Run fn() holding <base>/current.lock (exclusive create) — shared by every
+// Tessel process that writes this project's team folder.
+export function withTeamLock(b, fn) {
   const lock = join(b, 'current.lock')
+  const token = `${process.pid}:${crypto.randomBytes(8).toString('hex')}`
   const until = Date.now() + LOCK_WAIT_MS
   for (;;) {
+    if (Date.now() > until) throw new Error('The team folder is busy (another Tessel window is writing it).')
     try {
-      fs.writeFileSync(lock, String(process.pid), { flag: 'wx' })
+      fs.writeFileSync(lock, token, { flag: 'wx' })
       break
     } catch (err) {
       if (err.code !== 'EEXIST') throw err
     }
+    let text = null
     try {
-      if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) fs.unlinkSync(lock)
+      text = fs.readFileSync(lock, 'utf8')
     } catch {
-      // released meanwhile
+      continue // released meanwhile
     }
-    if (Date.now() > until) throw new Error('The team folder is busy (another Tessel window is writing it).')
+    if (holderGone(lock, text)) {
+      takeOver(lock, text, token)
+      continue
+    }
     sleepSync(15)
   }
   try {
     return fn()
   } finally {
     try {
-      fs.unlinkSync(lock)
+      if (fs.readFileSync(lock, 'utf8') === token) fs.unlinkSync(lock)
     } catch {
       // already gone
     }
@@ -110,7 +186,7 @@ export function writeCurrentTeams({ dir, panes, owner } = {}) {
   if (!Object.keys(clean).length && !fs.existsSync(b)) return { ok: true, changed: false, lost: [] }
   fs.mkdirSync(b, { recursive: true })
   const file = join(b, 'current.json')
-  return withLock(b, () => {
+  return withTeamLock(b, () => {
     const old = readJson(file)
     const now = Date.now()
     const merged = otherPanes(old, owner, now)
@@ -151,7 +227,7 @@ export function retireOldTeams({ dir, liveTeamIds, owner } = {}) {
   const b = base(dir)
   if (!b || !Array.isArray(liveTeamIds)) return { ok: false, error: 'Invalid team location.' }
   if (!fs.existsSync(b)) return { ok: true, retired: [] }
-  return withLock(b, () => {
+  return withTeamLock(b, () => {
     const file = join(b, 'current.json')
     const current = readJson(file)
     const now = Date.now()

@@ -6,7 +6,7 @@ import { spawn } from 'child_process'
 import { createRequire } from 'module'
 import { ensureTeamChannel, pollTeamChannel } from '../teamChannel'
 import { takeTeamAcks } from '../teamAcks'
-import { writeCurrentTeams, retireOldTeams, addNotices } from '../teamNotices'
+import { writeCurrentTeams, retireOldTeams, addNotices, withTeamLock } from '../teamNotices'
 
 const require = createRequire(import.meta.url)
 const SERVER = join(__dirname, '..', 'teamMcp', 'server.cjs')
@@ -301,15 +301,51 @@ describe('two Tessel windows in one project', () => {
     expect(res.lost).toEqual(['team-1'])
   })
 
-  it('waits for a lock held by another process, and takes over a stale one', () => {
-    fs.mkdirSync(base(), { recursive: true })
-    const lock = join(base(), 'current.lock')
-    fs.writeFileSync(lock, '1')
-    expect(() => writeCurrentTeams({ dir, owner: 'dev', panes: { 'pane-1-aaaaaa': { team: 'team-1', num: 1 } } })).toThrow(/busy/)
+  const pane1 = { 'pane-1-aaaaaa': { team: 'team-1', num: 1 } }
+  const aged = (file) => {
     const old = new Date(Date.now() - 60000)
-    fs.utimesSync(lock, old, old)
-    expect(writeCurrentTeams({ dir, owner: 'dev', panes: { 'pane-1-aaaaaa': { team: 'team-1', num: 1 } } }).ok).toBe(true)
+    fs.utimesSync(file, old, old)
+  }
+  const lockFile = () => {
+    fs.mkdirSync(base(), { recursive: true })
+    return join(base(), 'current.lock')
+  }
+
+  it('never takes the lock of a process that still runs, however old', async () => {
+    const lock = lockFile()
+    const holder = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' })
+    try {
+      fs.writeFileSync(lock, `${holder.pid}:live`)
+      aged(lock) // slow or suspended, not dead
+      expect(() => writeCurrentTeams({ dir, owner: 'dev', panes: pane1 })).toThrow(/busy/)
+      expect(fs.readFileSync(lock, 'utf8')).toBe(`${holder.pid}:live`)
+    } finally {
+      holder.kill()
+    }
+  })
+
+  it('takes over the lock of a process that is gone', async () => {
+    const lock = lockFile()
+    const gone = spawn(process.execPath, ['-e', '0'], { stdio: 'ignore' })
+    await new Promise((r) => gone.on('exit', r))
+    fs.writeFileSync(lock, `${gone.pid}:dead`)
+    expect(writeCurrentTeams({ dir, owner: 'dev', panes: pane1 }).ok).toBe(true)
     expect(fs.existsSync(lock)).toBe(false)
+    expect(Object.keys(current().panes)).toEqual(['pane-1-aaaaaa'])
+  })
+
+  it('an empty lock is taken over only once it is old', () => {
+    const lock = lockFile()
+    fs.writeFileSync(lock, '')
+    expect(() => writeCurrentTeams({ dir, owner: 'dev', panes: pane1 })).toThrow(/busy/)
+    aged(lock)
+    expect(writeCurrentTeams({ dir, owner: 'dev', panes: pane1 }).ok).toBe(true)
+  })
+
+  it('removes only its own lock', () => {
+    const lock = lockFile()
+    withTeamLock(base(), () => fs.writeFileSync(lock, '999999:someone-else'))
+    expect(fs.readFileSync(lock, 'utf8')).toBe('999999:someone-else')
   })
 
   it('two processes writing at the same time lose no update', async () => {
