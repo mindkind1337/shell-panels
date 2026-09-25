@@ -3374,10 +3374,16 @@ function inputShownEmpty(id) {
   const leaf = findLeaf(id)
   const pane = getPane(id)
   if (!leaf || leaf.agentId !== 'codex' || !pane || !pane.screenText) return false
-  return pane
+  // It must be THE input line: the last "›" line on screen, with at most
+  // Codex's status line after it.
+  const lines = pane
     .screenText(6)
     .split(/\r?\n/)
-    .some((line) => /^\s*›\s+Ask Codex to do anything\s*$/.test(line))
+    .filter((l) => l.trim())
+  let last = -1
+  for (let i = 0; i < lines.length; i++) if (/^\s*›/.test(lines[i])) last = i
+  if (last === -1 || lines.length - 1 - last > 1) return false
+  return /^\s*›\s+Ask Codex to do anything\s*$/.test(lines[last])
 }
 function wakeIfNeeded(leaf) {
   const count = teamUnread[leaf.id] || 0
