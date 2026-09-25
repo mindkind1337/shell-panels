@@ -218,6 +218,7 @@ describe('setting up the team tools', () => {
     expect(t).toMatch(/^model = "x"/)
     expect(t).toContain(`args = ['${script}']`)
     expect(t).toContain('env_vars = ["TESSEL_PANE_ID", "TESSEL_PROJECT_DIR"]')
+    expect(t).toContain('default_tools_approval_mode = "approve"')
     expect(await installCodexServer(script, async () => ({ ok: true }), home)).toEqual({ changed: false })
     // A quoted key is ours too: replaced, not duplicated; refused = untouched.
     fs.writeFileSync(join(home, '.codex', 'config.toml'), 'model = "x"\n[mcp_servers."tessel-team"]\ncommand = "old"\n[mcp_servers."tessel-team".env]\nA = "1"\n[other]\nk = 1\n')
