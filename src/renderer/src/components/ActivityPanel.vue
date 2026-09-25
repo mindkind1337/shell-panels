@@ -38,6 +38,16 @@ const STATE = {
 }
 
 const period = ref('7d')
+const openRows = ref(new Set()) // timeline rows shown in full
+
+function toggleRow(key) {
+  const next = new Set(openRows.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  openRows.value = next
+}
+
+const rowKey = (x) => `${x.t}:${x.kind}:${x.paneId || x.author || x.name || ''}`
 const agentFilter = ref('')
 const typeFilter = ref(new Set(TYPES.map((t) => t.value)))
 const stateFilter = ref(null) // from the cards: 'approval' | 'working'
@@ -363,7 +373,16 @@ const periodLabel = computed(() => PERIODS.find((p) => p.value === period.value)
           </div>
         </div>
         <ol v-if="timeline.length" class="act-timeline">
-          <li v-for="(x, i) in timeline" :key="i" class="act-event" :class="x.kind">
+          <li
+            v-for="x in timeline"
+            :key="rowKey(x)"
+            class="act-event"
+            :class="[x.kind, { expandable: !!(x.text || x.preview), open: openRows.has(rowKey(x)) }]"
+            :tabindex="x.text || x.preview ? 0 : -1"
+            :aria-expanded="x.text || x.preview ? openRows.has(rowKey(x)) : undefined"
+            @click="(x.text || x.preview) && toggleRow(rowKey(x))"
+            @keydown.enter.prevent="(x.text || x.preview) && toggleRow(rowKey(x))"
+          >
             <span class="act-time">{{ x.day && x.kind === 'journal' ? x.day : when(x.t) }}</span>
             <span class="act-kind" :class="x.kind.replace(/-end$/, '')">{{
               TYPES.find((t) => t.value === x.kind.replace(/-end$/, ''))?.label.replace(/s$/, '') || x.kind
@@ -372,6 +391,7 @@ const periodLabel = computed(() => PERIODS.find((p) => p.value === period.value)
               <strong>{{ describe(x).who }}</strong> {{ describe(x).text }}
               <span v-if="describe(x).note" class="act-dim"> · {{ describe(x).note }}</span>
             </span>
+            <span v-if="openRows.has(rowKey(x))" class="act-full">{{ x.text || x.preview }}</span>
           </li>
         </ol>
         <p v-else class="act-none">

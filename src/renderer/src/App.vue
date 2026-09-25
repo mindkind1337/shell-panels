@@ -27,6 +27,7 @@ import { detectApproval } from './agentLimit'
 import { activity, recordActivity, loadActivity, saveActivityNow } from './activityStore'
 import ActivityPanel from './components/ActivityPanel.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
+import NotesPanel from './components/NotesPanel.vue'
 import { dropBuffer, seedBuffer } from './ptyStore'
 import { tasks as boardTasks, setTasks, updateTask, removeTask } from './taskBoardStore'
 
@@ -975,9 +976,10 @@ function buildCommands() {
     add('Workspace', 'Activity of the agents', () => openActivity('workspace'), {
       hint: 'Messages, approvals, limits and working time'
     })
-    add('Workspace', 'Open project notes', () => openProjectNotes(wsId), {
-      hint: 'The notes file the agents of this workspace share'
+    add('Workspace', 'Project notes', () => openNotesView(wsId), {
+      hint: 'Read or edit the notes the agents of this workspace share'
     })
+    add('Workspace', 'Open project notes in a text editor', () => openProjectNotes(wsId))
     add('Workspace', 'Share project notes with the agents', () => shareProjectNotes(wsId), {
       hint: 'Tell each agent where the notes are'
     })
@@ -2109,7 +2111,8 @@ function logMessage(leafId, status, text, meta = {}) {
     wsId: wsOfLeaf(leafId)?.id || null,
     preview: String(text || '')
       .replace(/\s+/g, ' ')
-      .slice(0, 160)
+      .slice(0, 160),
+    text: String(text || '').slice(0, 8000)
   })
 }
 
@@ -2516,7 +2519,21 @@ async function shareProjectNotes(wsId) {
   )
 }
 
-// Open the workspace's notes file for the user (created if missing).
+// The notes view inside Tessel (NotesPanel), for a workspace.
+const notesView = ref(null) // { wsId, dir, wsName, template }
+function openNotesView(wsId) {
+  const ws = workspaces.value.find((w) => w.id === wsId)
+  if (!ws) return
+  const dir = ws.cwd || wsAgents(wsId)[0]?.startDir
+  if (!dir) {
+    showToast(`Set a project folder for "${ws.name}" first.`, { kind: 'error' })
+    return
+  }
+  closeMenus()
+  notesView.value = { wsId, dir, wsName: ws.name, template: projectNotesTemplate(ws) }
+}
+
+// Open the workspace's notes file in the user's text editor (created if missing).
 async function openProjectNotes(wsId) {
   const ws = workspaces.value.find((w) => w.id === wsId)
   if (!ws) return
@@ -3183,7 +3200,7 @@ onBeforeUnmount(() => {
         @activity="openActivity"
         @focus-pane="focusPane"
         @message-ws="messageWorkspace"
-        @notes-ws="openProjectNotes"
+        @notes-ws="openNotesView"
         @select="selectWorkspace"
         @create="createWorkspace"
         @rename="renameWorkspace"
@@ -3321,6 +3338,16 @@ onBeforeUnmount(() => {
       :confirm-label="confirmState.confirmLabel || 'OK'"
       :danger="!!confirmState.danger"
       @answer="answerConfirm"
+    />
+
+    <NotesPanel
+      v-if="notesView"
+      :key="notesView.wsId"
+      :dir="notesView.dir"
+      :ws-name="notesView.wsName"
+      :template="notesView.template"
+      @open-external="openProjectNotes(notesView.wsId)"
+      @close="notesView = null"
     />
 
     <ActivityPanel

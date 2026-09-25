@@ -22,6 +22,8 @@ const api = {
   projectNotes: (opts) => ipcRenderer.invoke('notes:ensure', opts),
   openProjectNotes: (opts) => ipcRenderer.invoke('notes:open', opts),
   readProjectNotes: (dir) => ipcRenderer.invoke('notes:read', dir),
+  loadNotes: (opts) => ipcRenderer.invoke('notes:load', opts),
+  saveNotes: (opts) => ipcRenderer.invoke('notes:save', opts),
   activity: {
     load: () => ipcRenderer.invoke('activity:load'),
     save: (events) => ipcRenderer.invoke('activity:save', events)

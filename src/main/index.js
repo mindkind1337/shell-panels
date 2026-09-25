@@ -437,6 +437,37 @@ ipcMain.handle('activity:save', (_evt, events) => {
   }
 })
 
+// The notes view in Tessel: load (created from the template if missing) and
+// save. A save carries the modification time it was based on; if the file
+// changed since (an agent wrote in it), nothing is written and the current
+// text comes back, so nobody's work is overwritten.
+ipcMain.handle('notes:load', (_evt, opts = {}) => {
+  const res = ensureNotes(opts)
+  if (!res.ok) return res
+  try {
+    return { ok: true, path: res.path, text: fs.readFileSync(res.path, 'utf8'), mtime: fs.statSync(res.path).mtimeMs }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
+})
+ipcMain.handle('notes:save', (_evt, opts = {}) => {
+  const res = ensureNotes({ dir: opts.dir, content: '' })
+  if (!res.ok) return res
+  try {
+    const mtime = fs.statSync(res.path).mtimeMs
+    if (Number.isFinite(opts.baseMtime) && Math.abs(mtime - opts.baseMtime) > 1) {
+      return { ok: false, conflict: true, text: fs.readFileSync(res.path, 'utf8'), mtime }
+    }
+    const tmp = res.path + '.tmp'
+    fs.writeFileSync(tmp, String(opts.text ?? ''), 'utf8')
+    fs.renameSync(tmp, res.path)
+    return { ok: true, path: res.path, mtime: fs.statSync(res.path).mtimeMs }
+  } catch (err) {
+    log.warn('notes', `save failed: ${err.message}`)
+    return { ok: false, error: err.message }
+  }
+})
+
 // The shared notes of a project, read for the Activity view (journal lines).
 ipcMain.handle('notes:read', (_evt, dir) => {
   try {

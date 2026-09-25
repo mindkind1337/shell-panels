@@ -207,7 +207,8 @@ export function summarize(events, opts = {}) {
           status: e.status,
           source: e.source || 'you',
           scope: e.scope || 'workspace',
-          preview: e.preview || ''
+          preview: e.preview || '',
+          text: e.text || e.preview || ''
         })
       }
       continue
