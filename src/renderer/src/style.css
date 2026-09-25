@@ -802,6 +802,7 @@ button {
 
 /* ================= Task board side panel ================= */
 .task-panel {
+  position: relative;
   flex: 0 0 330px;
   height: 100%;
   display: flex;
@@ -1381,6 +1382,33 @@ button {
 
 .ws-resize:hover::before,
 .ws-sidebar.resizing .ws-resize::before {
+  background: var(--accent);
+}
+
+/* The task board's left edge: drag to resize it. */
+.task-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -5px;
+  width: 10px;
+  z-index: 20;
+  cursor: col-resize;
+}
+
+.task-resize::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 5px;
+  width: 1px;
+  background: transparent;
+  transition: background 0.12s;
+}
+
+.task-resize:hover::before,
+.task-panel.resizing .task-resize::before {
   background: var(--accent);
 }
 

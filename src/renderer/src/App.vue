@@ -668,6 +668,7 @@ function saveLayoutNow() {
     broadcast: broadcast.value,
     sidebarCollapsed: sidebarCollapsed.value,
     sidebarWidth: sidebarWidth.value,
+    taskPanelWidth: taskPanelWidth.value,
     currentIndex: Math.max(
       0,
       workspaces.value.findIndex((w) => w.id === currentWsId.value)
@@ -840,6 +841,47 @@ function toggleMaximize(id) {
 
 // --- Agent Task Board (kanban side panel) ----------------------------------
 const taskPanelOpen = ref(false)
+// The task board's width: dragged by its left edge (double-click: back to
+// the default), saved with the layout.
+const TASK_PANEL_DEFAULT = 330
+const TASK_PANEL_MIN = 260
+const TASK_PANEL_MAX = 900
+const taskPanelWidth = ref(TASK_PANEL_DEFAULT)
+const taskResizing = ref(false)
+function clampTaskPanel(w) {
+  // Always leave room for the terminals.
+  const max = Math.min(TASK_PANEL_MAX, Math.max(TASK_PANEL_MIN, window.innerWidth - 420))
+  return Math.round(Math.min(max, Math.max(TASK_PANEL_MIN, w)))
+}
+let taskResizeLastDown = 0
+function startTaskResize(e) {
+  if (e.button !== 0) return
+  e.preventDefault()
+  const now = Date.now()
+  if (now - taskResizeLastDown < 400) {
+    taskResizeLastDown = 0
+    taskPanelWidth.value = TASK_PANEL_DEFAULT
+    window.dispatchEvent(new Event('terminal-layout-change'))
+    return
+  }
+  taskResizeLastDown = now
+  const right = e.currentTarget.parentElement.getBoundingClientRect().right
+  taskResizing.value = true
+  document.body.classList.add('ws-resizing')
+  const move = (ev) => {
+    taskPanelWidth.value = clampTaskPanel(right - ev.clientX)
+    window.dispatchEvent(new Event('terminal-layout-change'))
+  }
+  const up = () => {
+    taskResizing.value = false
+    document.body.classList.remove('ws-resizing')
+    window.removeEventListener('pointermove', move)
+    window.removeEventListener('pointerup', up)
+    refitSoon()
+  }
+  window.addEventListener('pointermove', move)
+  window.addEventListener('pointerup', up)
+}
 
 // Live list of agent panes, handed to the board so a task can be assigned to
 // one. Walks the same tree the terminals render from, so it recomputes only when
@@ -4542,6 +4584,7 @@ async function restoreOrSeedLayout() {
     }
     broadcast.value = !!saved.broadcast
     sidebarCollapsed.value = !!saved.sidebarCollapsed
+    if (Number.isFinite(saved.taskPanelWidth)) taskPanelWidth.value = clampTaskPanel(saved.taskPanelWidth)
     if (Number.isFinite(saved.sidebarWidth)) {
       sidebarWidth.value = Math.min(480, Math.max(160, saved.sidebarWidth))
     }
@@ -4638,6 +4681,7 @@ onMounted(async () => {
       broadcast,
       sidebarCollapsed,
       sidebarWidth,
+      taskPanelWidth,
       settings,
       placement,
       teams
@@ -5046,7 +5090,17 @@ onBeforeUnmount(() => {
           {{ initError || 'Starting...' }}
         </div>
       </div>
-      <aside v-if="taskPanelOpen" class="task-panel">
+      <aside
+        v-if="taskPanelOpen"
+        class="task-panel"
+        :class="{ resizing: taskResizing }"
+        :style="{ flexBasis: taskPanelWidth + 'px' }"
+      >
+        <div
+          class="task-resize"
+          title="Drag to resize. Double-click to reset."
+          @pointerdown="startTaskResize"
+        ></div>
         <TaskBoard
           :agent-panes="agentPanes"
           :workspace-id="currentWsId"
