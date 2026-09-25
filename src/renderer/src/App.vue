@@ -2281,7 +2281,7 @@ async function startTask(spec, opts = {}) {
     const before = teamMembers(opts.teamId)
     leaf.team = opts.teamId
     logMembership(leaf, opts.teamId)
-    assignInbox(teamById(opts.teamId), leaf)
+    await assignInbox(teamById(opts.teamId), leaf)
     tellAgents(before, `[Tessel] Team "${teamById(opts.teamId).name}": ${paneLabel(leaf)} joined the team.`, opts.teamId)
   }
   updateTask(task.id, { paneId: leaf.id })
@@ -2566,10 +2566,30 @@ async function setTeamLead(teamId, leafId) {
     showToast('Set a project folder on this workspace first: the lead works from it.', { kind: 'error' })
     return
   }
-  team.leadId = null
+  // The new lead's inbox first: if it cannot be made, nothing changes.
+  let box = null
+  if (leaf) {
+    const mates = teamMembers(teamId).filter((l) => l.id !== leaf.id)
+    box = await assignInbox(team, leaf, (inbox) =>
+      leadGuide({
+        teamName: team.name,
+        inbox,
+        members: mates.map(agentLabel),
+        kinds: taskAgentKinds.value.map((a) => a.id)
+      })
+    )
+    if (!box) {
+      showToast(`Could not make ${leaf.title}'s inbox, so it is not the lead. Check that the project folder can be written to.`, {
+        kind: 'error',
+        timeout: 8000
+      })
+      return
+    }
+  }
+  team.leadId = leaf ? leaf.id : null
   if (old) {
     // Its inbox stays, for messages only.
-    assignInbox(team, old)
+    await assignInbox(team, old)
     tellAgents([old], `[Tessel] You no longer lead the team "${team.name}". Your inbox now takes messages only.`, teamId)
   }
   if (!leaf) {
@@ -2580,25 +2600,10 @@ async function setTeamLead(teamId, leafId) {
     }
     return
   }
-  team.leadId = leaf.id
-  const mates = teamMembers(teamId).filter((l) => l.id !== leaf.id)
-  const box = assignInbox(team, leaf, (inbox) =>
-    leadGuide({
-      teamName: team.name,
-      inbox,
-      members: mates.map(agentLabel),
-      kinds: taskAgentKinds.value.map((a) => a.id)
-    })
-  )
-  if (!box) {
-    team.leadId = null
-    showToast("Could not make the lead's inbox.", { kind: 'error' })
-    return
-  }
   recordActivity({ type: 'team', action: 'lead', teamId, wsId: teamWsId(teamId), name: team.name, detail: leaf.title })
   tellAgents([leaf], `[Tessel] ${box.guide}`, teamId)
   tellAgents(
-    mates,
+    teamMembers(teamId).filter((l) => l.id !== leaf.id),
     `[Tessel] Team "${team.name}": ${paneLabel(leaf)} now leads the team. It may give you tasks; when you finish one, it reviews your work first.`,
     teamId
   )
@@ -2609,13 +2614,13 @@ async function setTeamLead(teamId, leafId) {
 // Every team member has its own inbox folder (.tessel/team/<random>/): an
 // agent writes a JSON file there to message a teammate, the team or its lead,
 // and Tessel delivers it into their terminal. The lead also gives tasks and
-// reviews through it. -> { path, guide } (null without a project folder).
-function assignInbox(team, leaf, guideFn = null) {
+// reviews through it. -> { path, guide }, or null when there is no project
+// folder or the folder could not be made (then nobody is told about it).
+async function assignInbox(team, leaf, guideFn = null) {
   const dir = teamDir(team.id)
   if (!dir || !window.shellApi.lead) return null
-  if (!team.inboxes) team.inboxes = {}
-  const token = team.inboxes[leaf.id] || randomToken()
-  team.inboxes[leaf.id] = token
+  const fresh = !(team.inboxes && team.inboxes[leaf.id])
+  const token = reserveInbox(team, leaf)
   const path = inboxPathFor(dir, token)
   const lead = teamLead(team.id)
   const guide = guideFn
@@ -2627,8 +2632,25 @@ function assignInbox(team, leaf, guideFn = null) {
         members: teamMembers(team.id).filter((l) => l.id !== leaf.id).map(agentLabel),
         lead: lead && lead.id !== leaf.id ? paneLabel(lead) : null
       })
-  window.shellApi.lead.ensure({ dir, token, guide })
+  let res = null
+  try {
+    res = await window.shellApi.lead.ensure({ dir, token, guide })
+  } catch (err) {
+    res = { ok: false, error: err.message }
+  }
+  if (!res || !res.ok) {
+    if (fresh && team.inboxes && team.inboxes[leaf.id] === token) delete team.inboxes[leaf.id]
+    return null
+  }
   return { path, guide }
+}
+
+// The inbox token of a member, made at once (no folder yet), so two callers
+// never make two.
+function reserveInbox(team, leaf) {
+  if (!team.inboxes) team.inboxes = {}
+  if (!team.inboxes[leaf.id]) team.inboxes[leaf.id] = randomToken()
+  return team.inboxes[leaf.id]
 }
 
 function dropInbox(team, leafId, dir = teamDir(team.id)) {
@@ -2759,7 +2781,7 @@ function runMemberMessage(team, from, req) {
   log.push(now)
   const isLead = lead && lead.id === from.id
   const head = isLead ? `[From your lead ${paneLabel(from)}]` : `[From ${paneLabel(from)}, team "${team.name}"]`
-  const meta = { source: isLead ? 'lead' : 'agent', scope: 'team', teamId: team.id, from: from.title }
+  const meta = { source: isLead ? 'lead' : 'agent', scope: 'team', teamId: team.id, from: from.title, waitIdle: true }
   const skipped = []
   for (const l of to) {
     if (limits[l.id]) {
@@ -2795,7 +2817,7 @@ async function pollTeams() {
         const token = team.inboxes && team.inboxes[m.id]
         if (!token) {
           // A team from before inboxes existed: set one up and say how.
-          const box = assignInbox(team, m)
+          const box = await assignInbox(team, m)
           if (box) tellAgents([m], `[Tessel] Team "${team.name}": ${box.guide}`, team.id)
           continue
         }
@@ -2995,7 +3017,7 @@ async function tellTeam(teamId, text, opts = {}) {
     tellAgents(members, `[Tessel] Team "${team.name}": ${text}`, teamId)
     return
   }
-  for (const leaf of members) if (!opts.only || opts.only.includes(leaf.id)) assignInbox(team, leaf)
+  for (const leaf of members) if (!opts.only || opts.only.includes(leaf.id)) reserveInbox(team, leaf)
   const ws = wsOfLeaf(members[0].id)
   const dir = (ws && ws.cwd) || members[0].startDir
   let notes = ''
@@ -3006,7 +3028,7 @@ async function tellTeam(teamId, text, opts = {}) {
   for (const leaf of members) {
     if (opts.only && !opts.only.includes(leaf.id)) continue
     const mates = members.filter((l) => l.id !== leaf.id).map(agentLabel)
-    const box = assignInbox(team, leaf)
+    const box = await assignInbox(team, leaf)
     tellAgents(
       [leaf],
       `[Tessel] You are now in team "${team.name}"` +
