@@ -6,7 +6,7 @@ import { spawn } from 'child_process'
 import { createRequire } from 'module'
 import { ensureTeamChannel, pollTeamChannel } from '../teamChannel'
 import { takeTeamAcks } from '../teamAcks'
-import { writeCurrentTeams, retireOldTeams, addNotices, withTeamLock } from '../teamNotices'
+import { writeCurrentTeams, retireOldTeams, addNotices } from '../teamNotices'
 
 const require = createRequire(import.meta.url)
 const SERVER = join(__dirname, '..', 'teamMcp', 'server.cjs')
@@ -249,38 +249,59 @@ describe('two Tessel windows in one project', () => {
     dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-two-'))
   })
   afterEach(() => {
+    delete process.env.TESSEL_PANE_ID
+    delete process.env.TESSEL_PROJECT_DIR
     fs.rmSync(dir, { recursive: true, force: true })
   })
   const base = () => join(dir, '.tessel', 'team-channel')
   const current = () => JSON.parse(fs.readFileSync(join(base(), 'current.json'), 'utf8'))
-  const setCurrent = (c) => fs.writeFileSync(join(base(), 'current.json'), JSON.stringify(c))
+  const ownFile = (o) => join(base(), `current.${o}.json`)
+  const age = (o, ms) => {
+    const d = JSON.parse(fs.readFileSync(ownFile(o), 'utf8'))
+    d.at -= ms
+    fs.writeFileSync(ownFile(o), JSON.stringify(d))
+  }
   const active = (teamId) => pollTeamChannel({ dir, teamId }).participants.some((p) => p.active)
+  const found = (paneId) => {
+    process.env.TESSEL_PANE_ID = paneId
+    process.env.TESSEL_PROJECT_DIR = dir
+    return mcp.locate()
+  }
 
-  it('each writes its own panes and keeps the other window’s', () => {
+  it('each window writes its own file; the merged view has both', () => {
     writeCurrentTeams({ dir, owner: 'dev', panes: { 'pane-1-aaaaaa': { team: 'team-1', num: 1 } } })
     writeCurrentTeams({ dir, owner: 'app', panes: { 'pane-9-zzzzzz': { team: 'team-9', num: 2 } } })
+    expect(Object.keys(current().panes).sort()).toEqual(['pane-1-aaaaaa', 'pane-9-zzzzzz'])
     writeCurrentTeams({ dir, owner: 'dev', panes: {} })
-    const c = current()
-    expect(Object.keys(c.panes)).toEqual(['pane-9-zzzzzz'])
-    expect(c.panes['pane-9-zzzzzz']).toEqual({ team: 'team-9', num: 2, owner: 'app' })
-    expect(fs.existsSync(join(base(), 'current.lock'))).toBe(false)
+    expect(current().panes).toEqual({ 'pane-9-zzzzzz': { team: 'team-9', num: 2, owner: 'app' } })
+  })
+
+  it('a window not seen for 5 minutes is gone', () => {
+    writeCurrentTeams({ dir, owner: 'app', panes: { 'pane-9-zzzzzz': { team: 'team-9', num: 2 } } })
+    age('app', 6 * 60 * 1000)
+    writeCurrentTeams({ dir, owner: 'dev', panes: { 'pane-1-aaaaaa': { team: 'team-1', num: 1 } } })
+    expect(Object.keys(current().panes)).toEqual(['pane-1-aaaaaa'])
+  })
+
+  it('the team tools find an agent from its window’s own file', () => {
+    ensureTeamChannel({ dir, teamId: 'team-9', members: [{ id: 'pane-9-zzzzzz', num: 2, title: 'B' }] })
+    writeCurrentTeams({ dir, owner: 'app', panes: { 'pane-9-zzzzzz': { team: 'team-9', num: 2 } } })
+    fs.rmSync(join(base(), 'current.json')) // even without the merged copy
+    expect(found('pane-9-zzzzzz').teamId).toBe('team-9')
   })
 
   it('retires only its own teams while the other window runs', () => {
     ensureTeamChannel({ dir, teamId: 'team-9', members: [{ id: 'pane-9-zzzzzz', num: 2, title: 'B' }] })
     ensureTeamChannel({ dir, teamId: 'team-1', members: [{ id: 'pane-1-aaaaaa', num: 1, title: 'A' }] })
     writeCurrentTeams({ dir, owner: 'app', panes: { 'pane-9-zzzzzz': { team: 'team-9', num: 2 } } })
+    // The other window's team has no pane right now: still its team.
+    writeCurrentTeams({ dir, owner: 'app', panes: {} })
     writeCurrentTeams({ dir, owner: 'dev', panes: { 'pane-1-aaaaaa': { team: 'team-1', num: 1 } } })
-    // The other window's team has no pane listed right now (say, between two
-    // writes): it is still not this window's to retire.
-    const c = current()
-    delete c.panes['pane-9-zzzzzz']
-    setCurrent(c)
-    // dev's own team-1 ended.
-    writeCurrentTeams({ dir, owner: 'dev', panes: {} })
+    writeCurrentTeams({ dir, owner: 'dev', panes: {} }) // dev's team-1 ended
     expect(retireOldTeams({ dir, liveTeamIds: [], owner: 'dev' }).retired).toEqual(['team-1'])
     expect(active('team-9')).toBe(true)
     expect(active('team-1')).toBe(false)
+    expect(JSON.parse(fs.readFileSync(ownFile('dev'), 'utf8')).teams).toEqual([])
   })
 
   it('a team of unknown origin is retired only when no other window runs', () => {
@@ -288,9 +309,7 @@ describe('two Tessel windows in one project', () => {
     writeCurrentTeams({ dir, owner: 'app', panes: {} })
     writeCurrentTeams({ dir, owner: 'dev', panes: {} })
     expect(retireOldTeams({ dir, liveTeamIds: [], owner: 'dev' }).retired).toEqual([])
-    const c = current()
-    c.owners.app -= 6 * 60 * 1000 // the other window is gone
-    setCurrent(c)
+    age('app', 6 * 60 * 1000) // the other window is gone
     expect(retireOldTeams({ dir, liveTeamIds: [], owner: 'dev' }).retired).toEqual(['team-x'])
   })
 
@@ -299,53 +318,6 @@ describe('two Tessel windows in one project', () => {
     ensureTeamChannel({ dir, teamId: 'team-1', members: [] })
     const res = writeCurrentTeams({ dir, owner: 'dev', panes: { 'pane-1-aaaaaa': { team: 'team-1', num: 1 } } })
     expect(res.lost).toEqual(['team-1'])
-  })
-
-  const pane1 = { 'pane-1-aaaaaa': { team: 'team-1', num: 1 } }
-  const aged = (file) => {
-    const old = new Date(Date.now() - 60000)
-    fs.utimesSync(file, old, old)
-  }
-  const lockFile = () => {
-    fs.mkdirSync(base(), { recursive: true })
-    return join(base(), 'current.lock')
-  }
-
-  it('never takes the lock of a process that still runs, however old', async () => {
-    const lock = lockFile()
-    const holder = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' })
-    try {
-      fs.writeFileSync(lock, `${holder.pid}:live`)
-      aged(lock) // slow or suspended, not dead
-      expect(() => writeCurrentTeams({ dir, owner: 'dev', panes: pane1 })).toThrow(/busy/)
-      expect(fs.readFileSync(lock, 'utf8')).toBe(`${holder.pid}:live`)
-    } finally {
-      holder.kill()
-    }
-  })
-
-  it('takes over the lock of a process that is gone', async () => {
-    const lock = lockFile()
-    const gone = spawn(process.execPath, ['-e', '0'], { stdio: 'ignore' })
-    await new Promise((r) => gone.on('exit', r))
-    fs.writeFileSync(lock, `${gone.pid}:dead`)
-    expect(writeCurrentTeams({ dir, owner: 'dev', panes: pane1 }).ok).toBe(true)
-    expect(fs.existsSync(lock)).toBe(false)
-    expect(Object.keys(current().panes)).toEqual(['pane-1-aaaaaa'])
-  })
-
-  it('an empty lock is taken over only once it is old', () => {
-    const lock = lockFile()
-    fs.writeFileSync(lock, '')
-    expect(() => writeCurrentTeams({ dir, owner: 'dev', panes: pane1 })).toThrow(/busy/)
-    aged(lock)
-    expect(writeCurrentTeams({ dir, owner: 'dev', panes: pane1 }).ok).toBe(true)
-  })
-
-  it('removes only its own lock', () => {
-    const lock = lockFile()
-    withTeamLock(base(), () => fs.writeFileSync(lock, '999999:someone-else'))
-    expect(fs.readFileSync(lock, 'utf8')).toBe('999999:someone-else')
   })
 
   it('two processes writing at the same time lose no update', async () => {
@@ -368,6 +340,12 @@ for (let i = 0; i < 150; i++) n.writeCurrentTeams({ dir: ${JSON.stringify(dir)},
     const [a, b] = await Promise.all([child('a'), child('b')])
     expect(a).toEqual({ c: 0, err: '' })
     expect(b).toEqual({ c: 0, err: '' })
-    expect(Object.keys(current().panes).sort()).toEqual(['pane-a-149', 'pane-b-149'])
+    // Each window's own file is exact; the team tools read those.
+    expect(Object.keys(JSON.parse(fs.readFileSync(ownFile('a'), 'utf8')).panes)).toEqual(['pane-a-149'])
+    expect(Object.keys(JSON.parse(fs.readFileSync(ownFile('b'), 'utf8')).panes)).toEqual(['pane-b-149'])
+    ensureTeamChannel({ dir, teamId: 'team-a', members: [{ id: 'pane-a-149', num: 1, title: 'A' }] })
+    ensureTeamChannel({ dir, teamId: 'team-b', members: [{ id: 'pane-b-149', num: 1, title: 'B' }] })
+    expect(found('pane-a-149').teamId).toBe('team-a')
+    expect(found('pane-b-149').teamId).toBe('team-b')
   }, 60000)
 })

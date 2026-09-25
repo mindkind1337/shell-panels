@@ -22,7 +22,7 @@
 const fs = require('fs')
 const path = require('path')
 
-const VERSION = '1.1.0'
+const VERSION = '1.2.0'
 const MAX_TEXT = 6000
 
 // --- Finding my team and me ---------------------------------------------------
@@ -51,13 +51,36 @@ function readJson(file) {
   }
 }
 
-// Tessel writes <project>/.tessel/team-channel/current.json:
+// Tessel writes who is in which team now (see currentPanes):
 // { panes: { <paneId>: { team, num } } } for the teams that exist now. Only
 // those count: a folder of a team that was ungrouped is never used.
 //
 // When Tessel started this agent, TESSEL_PANE_ID says who it is, and nothing
 // else can change that. Only without it, "me" ("#4") is used, and only when
 // it matches exactly one agent.
+// Each Tessel window writes its own current.<window>.json ({ at, panes });
+// those written in the last 5 minutes are read. current.json (their merged
+// copy, or the only file of an older Tessel) when there are none.
+const WINDOW_GONE_MS = 5 * 60 * 1000
+function currentPanes(base) {
+  let names = []
+  try {
+    names = fs.readdirSync(base)
+  } catch {
+    return null
+  }
+  let panes = null
+  for (const n of names) {
+    if (!/^current\.[A-Za-z0-9_-]{1,40}\.json$/.test(n)) continue
+    const data = readJson(path.join(base, n))
+    if (!data || !data.panes || typeof data.at !== 'number' || Date.now() - data.at > WINDOW_GONE_MS) continue
+    panes = Object.assign(panes || {}, data.panes)
+  }
+  if (panes) return panes
+  const current = readJson(path.join(base, 'current.json'))
+  return current && current.panes ? current.panes : null
+}
+
 // -> { root, state, meId, me, teamId } or { error }
 function locate(meArg, start) {
   const paneId = process.env.TESSEL_PANE_ID || ''
@@ -67,9 +90,9 @@ function locate(meArg, start) {
   const hits = []
   for (const dir of candidateDirs(start)) {
     const base = path.join(dir, '.tessel', 'team-channel')
-    const current = readJson(path.join(base, 'current.json'))
-    if (!current || !current.panes) continue
-    for (const [id, p] of Object.entries(current.panes)) {
+    const panes = currentPanes(base)
+    if (!panes) continue
+    for (const [id, p] of Object.entries(panes)) {
       if (!p || typeof p.team !== 'string') continue
       const mine = paneId ? id === paneId : p.num === Number(num[1])
       if (mine && !hits.some((h) => h.id === id)) hits.push({ id, team: p.team, base })

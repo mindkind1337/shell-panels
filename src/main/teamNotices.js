@@ -4,7 +4,6 @@
 //   <project>/.tessel/team-channel/<team>/notices.json   Tessel's own notices
 //     to an agent (team changes, answers to a lead), read once like messages
 import fs from 'fs'
-import crypto from 'crypto'
 import { join, resolve, isAbsolute } from 'path'
 import { ensureTeamChannel } from './teamChannel'
 
@@ -47,137 +46,82 @@ function readJson(file) {
   }
 }
 
-// Two Tessel windows (say the installed app and the dev build) can have teams
-// in the same project. current.json is shared:
-//   panes:  { <paneId>: { team, num, owner } }   who is in which team now
-//   owners: { <owner>: <last write> }           windows still running
-//   teams:  { <teamId>: <owner> }               which window made each team
-// Each window writes only its own panes and keeps the others', as long as
-// that window wrote in the last 5 minutes. A window retires only its own
-// teams (a team of unknown origin only when no other window runs). Every
-// read-modify-write of current.json, and retiring, happens under a lock file
-// shared by the processes (withTeamLock), so no window's update is lost.
-const OWNER_GONE_MS = 5 * 60 * 1000
-const OWNER_TOUCH_MS = 60 * 1000
-const LOCK_WAIT_MS = 3000
-// A lock file left empty (its process died between creating and writing it).
-const LOCK_EMPTY_STALE_MS = 10000
-
 function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }
 
-// The lock file holds "<pid>:<random token>". It is taken over only when
-// the process that holds it no longer runs (not because it is old: a live
-// process may just be slow), and only its holder removes it.
-function holderGone(lock, text) {
-  if (!text) {
-    try {
-      return Date.now() - fs.statSync(lock).mtimeMs > LOCK_EMPTY_STALE_MS
-    } catch {
-      return false
-    }
-  }
-  const pid = Number.parseInt(text.split(':')[0], 10)
-  if (!Number.isInteger(pid) || pid <= 0) return true
-  if (pid === process.pid) return false
-  try {
-    process.kill(pid, 0)
-    return false
-  } catch (err) {
-    return err.code === 'ESRCH'
-  }
+// Two Tessel windows (say the installed app and the dev build) can have teams
+// in the same project. Nothing is shared for writing, so no window's update
+// can be lost:
+//   current.<owner>.json   written only by that window:
+//                          { owner, at, panes: { <paneId>: { team, num } },
+//                            teams: [the teams it made] }
+//   current.json           the merged view (panes of every window seen in the
+//                          last 5 minutes), rewritten by any window when it
+//                          differs; read by team tools of an older version.
+// A window rewrites its own file when it changes, and every minute anyway to
+// show it still runs. It retires only teams it made (a team of unknown
+// origin only when no other window runs).
+const OWNER_GONE_MS = 5 * 60 * 1000
+const OWNER_TOUCH_MS = 60 * 1000
+const OWNER_RE = /^[A-Za-z0-9_-]{1,40}$/
+
+function ownerFile(b, owner) {
+  return join(b, `current.${owner}.json`)
 }
 
-// Remove a dead holder's lock, and only that one: moved aside first, and
-// put back if another process replaced it meanwhile.
-function takeOver(lock, text, token) {
-  const aside = `${lock}.${token.replace(':', '-')}.old` // no ":" in a Windows file name
+// The files of the windows seen in the last 5 minutes (not `except`).
+function liveOwners(b, except = null, now = Date.now()) {
+  const out = []
+  let names = []
   try {
-    fs.renameSync(lock, aside)
+    names = fs.readdirSync(b)
   } catch {
-    return
+    return out
   }
-  let moved = null
-  try {
-    moved = fs.readFileSync(aside, 'utf8')
-  } catch {
-    // unreadable: treated as someone else's
-  }
-  if (moved !== text) {
-    try {
-      fs.linkSync(aside, lock) // back in place, unless a new lock is there
-    } catch {
-      // a new lock is there already
-    }
-  }
-  try {
-    fs.unlinkSync(aside)
-  } catch {
-    // already gone
-  }
-}
-
-// Run fn() holding <base>/current.lock (exclusive create) — shared by every
-// Tessel process that writes this project's team folder.
-export function withTeamLock(b, fn) {
-  const lock = join(b, 'current.lock')
-  const token = `${process.pid}:${crypto.randomBytes(8).toString('hex')}`
-  const until = Date.now() + LOCK_WAIT_MS
-  for (;;) {
-    if (Date.now() > until) throw new Error('The team folder is busy (another Tessel window is writing it).')
-    try {
-      fs.writeFileSync(lock, token, { flag: 'wx' })
-      break
-    } catch (err) {
-      if (err.code !== 'EEXIST') throw err
-    }
-    let text = null
-    try {
-      text = fs.readFileSync(lock, 'utf8')
-    } catch {
-      continue // released meanwhile
-    }
-    if (holderGone(lock, text)) {
-      takeOver(lock, text, token)
-      continue
-    }
-    sleepSync(15)
-  }
-  try {
-    return fn()
-  } finally {
-    try {
-      if (fs.readFileSync(lock, 'utf8') === token) fs.unlinkSync(lock)
-    } catch {
-      // already gone
-    }
-  }
-}
-
-function fresh(current, o, now) {
-  const at = current && current.owners && current.owners[o]
-  return typeof at === 'number' && now - at <= OWNER_GONE_MS
-}
-
-// Pane entries of the other, still running, Tessel windows.
-function otherPanes(current, owner, now = Date.now()) {
-  const out = {}
-  if (!owner || !current || !current.panes) return out
-  for (const [id, p] of Object.entries(current.panes)) {
-    if (p && p.owner && p.owner !== owner && fresh(current, p.owner, now)) out[id] = p
+  for (const n of names) {
+    const m = /^current\.([A-Za-z0-9_-]{1,40})\.json$/.exec(n)
+    if (!m || m[1] === except) continue
+    const data = readJson(join(b, n))
+    if (data && typeof data.at === 'number' && now - data.at <= OWNER_GONE_MS && data.panes) out.push(data)
   }
   return out
 }
 
+function writeOwn(b, owner, own) {
+  writeAtomic(ownerFile(b, owner), { version: 1, owner, at: Date.now(), panes: own.panes, teams: own.teams })
+}
+
+// The merged view for older team tools, rewritten only when it differs.
+function writeMerged(b) {
+  const panes = {}
+  for (const o of liveOwners(b)) {
+    for (const [id, p] of Object.entries(o.panes)) {
+      if (p && ID_RE.test(id) && ID_RE.test(String(p.team))) panes[id] = { team: p.team, num: p.num, owner: o.owner }
+    }
+  }
+  const file = join(b, 'current.json')
+  const old = readJson(file)
+  if (old && JSON.stringify(old.panes) === JSON.stringify(panes)) return false
+  writeAtomic(file, { version: 1, panes })
+  return true
+}
+
+function hasActive(b, teamId) {
+  const state = readJson(join(b, teamId, 'state.json'))
+  return !!(state && state.members && Object.values(state.members).some((m) => m.active))
+}
+
 // panes: { <paneId>: { team, num } } for the teams of this project now;
-// owner: this Tessel window (set by the main process).
+// owner: this Tessel window (set by the main process; without it, the map is
+// written as it is, for a single window).
 // -> { ok, changed, lost: [teamId] } — lost: teams of this window found with
 // no active member (retired by a window that did not know about them yet):
 // the caller sets them up again.
 export function writeCurrentTeams({ dir, panes, owner } = {}) {
   const b = base(dir)
   if (!b || !panes || typeof panes !== 'object') return { ok: false, error: 'Invalid team location.' }
+  if (owner != null && !OWNER_RE.test(String(owner))) return { ok: false, error: 'Invalid team location.' }
   const clean = {}
   for (const [id, p] of Object.entries(panes)) {
     if (ID_RE.test(id) && p && ID_RE.test(String(p.team)) && Number.isInteger(p.num)) clean[id] = { team: p.team, num: p.num }
@@ -185,39 +129,25 @@ export function writeCurrentTeams({ dir, panes, owner } = {}) {
   // A project that never had a team gets no folder just for an empty map.
   if (!Object.keys(clean).length && !fs.existsSync(b)) return { ok: true, changed: false, lost: [] }
   fs.mkdirSync(b, { recursive: true })
-  const file = join(b, 'current.json')
-  return withTeamLock(b, () => {
+  if (!owner) {
+    const file = join(b, 'current.json')
     const old = readJson(file)
-    const now = Date.now()
-    const merged = otherPanes(old, owner, now)
-    for (const [id, p] of Object.entries(clean)) merged[id] = owner ? { ...p, owner } : p
-    const owners = {}
-    for (const [o, at] of Object.entries((old && old.owners) || {})) {
-      if (typeof at === 'number' && now - at <= OWNER_GONE_MS) owners[o] = at
-    }
-    const teams = {}
-    for (const [t, o] of Object.entries((old && old.teams) || {})) {
-      if (typeof o === 'string' && (o === owner || owners[o])) teams[t] = o
-    }
-    const lost = []
-    if (owner) {
-      for (const p of Object.values(clean)) {
-        teams[p.team] = owner
-        const state = readJson(join(b, p.team, 'state.json'))
-        if (state && state.members && !Object.values(state.members).some((m) => m.active) && !lost.includes(p.team))
-          lost.push(p.team)
-      }
-    }
-    const same =
-      old &&
-      JSON.stringify(old.panes) === JSON.stringify(merged) &&
-      JSON.stringify(old.teams || {}) === JSON.stringify(owner ? teams : old.teams || {})
-    // Unchanged: rewritten only now and then, to show this window still runs.
-    if (same && (!owner || now - (owners[owner] || 0) < OWNER_TOUCH_MS)) return { ok: true, changed: false, lost }
-    if (owner) owners[owner] = now
-    writeAtomic(file, owner ? { version: 1, panes: merged, owners, teams } : { version: 1, panes: merged })
-    return { ok: true, changed: !same, lost }
-  })
+    if (old && JSON.stringify(old.panes) === JSON.stringify(clean)) return { ok: true, changed: false, lost: [] }
+    writeAtomic(file, { version: 1, panes: clean })
+    return { ok: true, changed: true, lost: [] }
+  }
+  const old = readJson(ownerFile(b, owner))
+  const teams = new Set(Array.isArray(old && old.teams) ? old.teams.filter((t) => ID_RE.test(String(t))) : [])
+  for (const p of Object.values(clean)) teams.add(p.team)
+  const own = { panes: clean, teams: [...teams].sort() }
+  const same =
+    old && JSON.stringify(old.panes) === JSON.stringify(own.panes) && JSON.stringify(old.teams) === JSON.stringify(own.teams)
+  if (!same || !(Date.now() - (old.at || 0) < OWNER_TOUCH_MS)) writeOwn(b, owner, own)
+  const merged = writeMerged(b)
+  const lost = [...new Set(Object.values(clean).map((p) => p.team))].filter(
+    (t) => fs.existsSync(join(b, t, 'state.json')) && !hasActive(b, t)
+  )
+  return { ok: true, changed: !same || merged, lost }
 }
 
 // Teams of this project that do not exist any more: their members are made
@@ -226,33 +156,32 @@ export function writeCurrentTeams({ dir, panes, owner } = {}) {
 export function retireOldTeams({ dir, liveTeamIds, owner } = {}) {
   const b = base(dir)
   if (!b || !Array.isArray(liveTeamIds)) return { ok: false, error: 'Invalid team location.' }
+  if (owner != null && !OWNER_RE.test(String(owner))) return { ok: false, error: 'Invalid team location.' }
   if (!fs.existsSync(b)) return { ok: true, retired: [] }
-  return withTeamLock(b, () => {
-    const file = join(b, 'current.json')
-    const current = readJson(file)
-    const now = Date.now()
-    const live = new Set(liveTeamIds)
-    for (const p of Object.values(otherPanes(current, owner, now))) live.add(p.team)
-    const teams = (current && current.teams) || {}
-    const othersRun =
-      !!owner && Object.keys((current && current.owners) || {}).some((o) => o !== owner && fresh(current, o, now))
-    const retired = []
-    for (const t of fs.readdirSync(b)) {
-      if (!ID_RE.test(t) || live.has(t) || !fs.existsSync(join(b, t, 'state.json'))) continue
-      const maker = teams[t]
-      if (owner && maker && maker !== owner && fresh(current, maker, now)) continue
-      if (owner && !maker && othersRun) continue
-      const state = readJson(join(b, t, 'state.json'))
-      if (!state || !state.members || !Object.values(state.members).some((m) => m.active)) continue
-      const res = ensureTeamChannel({ dir, teamId: t, members: [] })
-      if (res.ok) retired.push(t)
-    }
-    if (current && current.teams && retired.some((t) => t in current.teams)) {
-      for (const t of retired) delete current.teams[t]
-      writeAtomic(file, current)
-    }
-    return { ok: true, retired }
-  })
+  const live = new Set(liveTeamIds)
+  const others = owner ? liveOwners(b, owner) : []
+  const theirs = new Set()
+  for (const o of others) {
+    for (const p of Object.values(o.panes)) if (p) theirs.add(p.team)
+    for (const t of Array.isArray(o.teams) ? o.teams : []) theirs.add(t)
+  }
+  const mineFile = owner ? readJson(ownerFile(b, owner)) : null
+  const mine = new Set(Array.isArray(mineFile && mineFile.teams) ? mineFile.teams : [])
+  // Teams this window has now are its own.
+  for (const t of liveTeamIds) if (ID_RE.test(String(t))) mine.add(t)
+  const retired = []
+  for (const t of fs.readdirSync(b)) {
+    if (!ID_RE.test(t) || live.has(t) || theirs.has(t) || !fs.existsSync(join(b, t, 'state.json'))) continue
+    if (owner && !mine.has(t) && others.length) continue // unknown origin, another window runs
+    if (!hasActive(b, t)) continue
+    const res = ensureTeamChannel({ dir, teamId: t, members: [] })
+    if (res.ok) retired.push(t)
+  }
+  if (owner && mineFile) {
+    const teams = [...mine].filter((t) => !retired.includes(t)).sort()
+    if (JSON.stringify(teams) !== JSON.stringify(mineFile.teams)) writeOwn(b, owner, { panes: mineFile.panes || {}, teams })
+  }
+  return { ok: true, retired }
 }
 
 // Notices from Tessel to agents of a team: [{ toId, text }].
