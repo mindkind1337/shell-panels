@@ -2851,7 +2851,12 @@ async function pollTeams() {
       for (const id of Object.keys(team.inboxes || {})) {
         if (!members.some((m) => m.id === id)) dropInbox(team, id, dir)
       }
-      if (!dir) continue
+      if (!dir) {
+        // The channel keeps its own folder (channelDir): still deliver.
+        await syncChannel(team)
+        await deliverChannel(team, members)
+        continue
+      }
       for (const m of members) {
         const token = team.inboxes && team.inboxes[m.id]
         if (token && inboxesBeingMade.has(token)) continue
