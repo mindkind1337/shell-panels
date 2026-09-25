@@ -34,41 +34,57 @@ const STATE_WORD = {
   limited: 'Usage limit'
 }
 
-// agent: { state: 'working'|'idle'|'approval'|'limited', since (ms), reset }
-// task: the task it is on ({ title, column, doingSince, startedAt }) or null
-// -> { text, level, reason, minutes, task, onTask }
+// agent: { state: 'working'|'idle'|'approval'|'limited', since (ms), reset,
+//          sinceStart: true when the state began before Tessel started and
+//          its real start is unknown (the time shown is a minimum) }
+// task: the task it is on ({ id, title, column, doingSince, startedAt }) or null
+// -> { text, level, kind ('approval'|'limit'|'quiet'|'long'|''), reason,
+//      minutes, task, onTask }
 export function trackAgent(agent, task, now = Date.now()) {
   const state = (agent && agent.state) || 'idle'
   const inState = now - ((agent && agent.since) || now)
   const mins = Math.floor(inState / MIN)
-  let text = `${STATE_WORD[state] || 'Idle'} · ${formatSpan(inState)}`
+  const plus = agent && agent.sinceStart ? '+' : ''
+  let text = `${STATE_WORD[state] || 'Idle'} · ${formatSpan(inState)}${plus}`
   // The reset time the agent printed; it is not taken as over just because
   // that time has passed (the limit clears when the agent works again).
   if (state === 'limited' && agent.reset) text = `Usage limit · resets ${agent.reset}`
   let level = 'ok'
+  let kind = ''
   let reason = ''
   const doing = task && task.column === 'doing'
-  const onTask = doing ? now - (task.doingSince || task.startedAt || now) : 0
+  const taskStart = doing ? task.doingSince || task.startedAt || now : now
+  const onTask = doing ? now - taskStart : 0
+  // Quiet on the task: only the time it has been both quiet AND on this task
+  // (an agent idle before the task began is not "stuck on it").
+  const quietOnTask = doing ? now - Math.max(taskStart, (agent && agent.since) || now) : 0
+  const quietMins = Math.floor(quietOnTask / MIN)
 
   if (state === 'approval' && mins >= TRACK.approvalWarnMin) {
     level = mins >= TRACK.approvalAlertMin ? 'alert' : 'warn'
-    reason = `Waiting for your approval for ${formatSpan(inState)}.`
+    kind = 'approval'
+    reason = `Waiting for your approval for ${formatSpan(inState)}${plus}.`
   } else if (state === 'limited') {
     level = 'warn'
+    kind = 'limit'
     reason = agent.reset ? `Out of usage (reset shown: ${agent.reset}).` : 'Out of usage.'
-  } else if (doing && state === 'idle' && mins >= TRACK.idleOnTaskWarnMin) {
-    level = mins >= TRACK.idleOnTaskAlertMin ? 'alert' : 'warn'
-    reason = `Quiet for ${formatSpan(inState)} while "${task.title}" is not finished: it may be stuck or waiting for you.`
+  } else if (doing && state === 'idle' && quietMins >= TRACK.idleOnTaskWarnMin) {
+    level = quietMins >= TRACK.idleOnTaskAlertMin ? 'alert' : 'warn'
+    kind = 'quiet'
+    reason = `Quiet for ${formatSpan(quietOnTask)} while "${task.title}" is not finished: it may be stuck or waiting for you.`
   } else if (doing && onTask >= TRACK.longTaskMin * MIN) {
     level = 'info'
+    kind = 'long'
     reason = `Long-running task: on "${task.title}" for ${formatSpan(onTask)}.`
   }
   return {
     text,
     level,
+    kind,
     reason,
-    minutes: mins,
+    minutes: kind === 'quiet' ? quietMins : mins,
     task: task ? task.title : '',
+    taskId: task ? task.id || task.title : '',
     onTask: doing ? formatSpan(onTask) : ''
   }
 }

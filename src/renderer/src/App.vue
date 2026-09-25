@@ -1970,13 +1970,36 @@ const agentStates = computed(() => {
 // For each agent: its state and since when (trackedState), its task, and
 // whether it looks stuck (src/shared/tracking.js). A clock ticks every 20 s;
 // time the computer slept is not counted as observed time.
-const trackedState = reactive({}) // leafId -> { state, since }
+const trackedState = reactive({}) // leafId -> { state, since, sinceStart }
+const appStartedAt = Date.now()
+
+// After a restart or reload: a pane still in the state the saved log last
+// recorded for it takes that start time back (an approval waiting 9 min
+// before the reload still shows 9 min). Otherwise the time stays marked as
+// a minimum ("+").
+function hydrateTracking() {
+  for (const [id, t] of Object.entries(trackedState)) {
+    if (!t.sinceStart) continue
+    let last = null
+    for (const e of activity) {
+      if (e.type === 'agent.state' && e.paneId === id && e.t < appStartedAt && (!last || e.t > last.t)) last = e
+    }
+    if (last && last.state === t.state) {
+      t.since = last.t
+      t.sinceStart = false
+    }
+  }
+}
 const clock = ref(Date.now())
 let lastTick = Date.now()
 const clockTimer = setInterval(() => {
   const now = Date.now()
   const slept = now - lastTick - 20000
-  if (slept > 60000) for (const t of Object.values(trackedState)) t.since += slept
+  if (slept > 60000) {
+    for (const t of Object.values(trackedState)) t.since += slept
+    // The time on a task does not grow while asleep either.
+    for (const t of boardTasks) if (t.column === 'doing' && t.doingSince) t.doingSince += slept
+  }
   lastTick = now
   clock.value = now
 }, 20000)
@@ -1986,7 +2009,11 @@ function trackOf(leafId) {
   const t = trackedState[leafId]
   if (!t) return null
   const info = agentStates.value[leafId]
-  return trackAgent({ state: t.state, since: t.since, reset: info ? info.reset : '' }, taskOfPane(leafId), clock.value)
+  return trackAgent(
+    { state: t.state, since: t.since, sinceStart: t.sinceStart, reset: info ? info.reset : '' },
+    taskOfPane(leafId),
+    clock.value
+  )
 }
 
 // One notice per episode when an agent needs you (level 'alert'); a new
@@ -1997,16 +2024,17 @@ const agentAlerts = computed(() => {
   forEachWsLeaf((leaf) => {
     if (leaf.kind !== 'agent') return
     const t = trackOf(leaf.id)
-    if (t && t.level === 'alert') out.push({ id: leaf.id, title: paneLabel(leaf), reason: t.reason })
+    if (t && t.level === 'alert')
+      out.push({ id: leaf.id, key: `${leaf.id}:${t.kind}:${t.taskId}`, title: paneLabel(leaf), reason: t.reason })
   })
   return out
 })
 watch(agentAlerts, (list) => {
-  const now = new Set(list.map((a) => a.id))
-  for (const id of [...alertedAgents]) if (!now.has(id)) alertedAgents.delete(id)
+  const now = new Set(list.map((a) => a.key))
+  for (const key of [...alertedAgents]) if (!now.has(key)) alertedAgents.delete(key)
   for (const a of list) {
-    if (alertedAgents.has(a.id)) continue
-    alertedAgents.add(a.id)
+    if (alertedAgents.has(a.key)) continue
+    alertedAgents.add(a.key)
     showToast(`${a.title}: ${a.reason}`, { kind: 'attention', timeout: 12000, action: { label: 'Show', run: () => focusPane(a.id) } })
   }
 })
@@ -2021,7 +2049,7 @@ function logState(id, info, state) {
   // The tracking clock follows logged states only, so a short burst (a
   // pasted message echoing, a redraw) does not restart it.
   if (state === 'closed') delete trackedState[id]
-  else trackedState[id] = { state, since: Date.now() }
+  else trackedState[id] = { state, since: Date.now(), sinceStart: !trackedState[id] && Date.now() - appStartedAt < 15000 }
   recordActivity({
     type: 'agent.state',
     paneId: id,
@@ -3725,7 +3753,7 @@ onMounted(async () => {
 
   // Persist on any structural / size / title / broadcast change (debounced).
   pruneTeams()
-  loadActivity()
+  loadActivity().then(hydrateTracking)
   persistReady = true
   watch(
     [

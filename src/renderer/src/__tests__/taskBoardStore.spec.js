@@ -156,3 +156,20 @@ describe('taskBoardStore', () => {
     expect(() => setTasks({})).toThrow()
   })
 })
+
+describe('doingSince', () => {
+  it('starts a new period whenever a task enters Doing', async () => {
+    const { addTask, moveTask, updateTask } = await import('../taskBoardStore')
+    const t = addTask({ title: 'Period' })
+    expect(t.doingSince).toBeUndefined()
+    moveTask(t.id, 'doing')
+    const first = t.doingSince
+    expect(first).toBeGreaterThan(0)
+    updateTask(t.id, { title: 'Renamed' })
+    expect(t.doingSince).toBe(first)
+    moveTask(t.id, 'review')
+    await new Promise((r) => setTimeout(r, 5))
+    moveTask(t.id, 'doing')
+    expect(t.doingSince).toBeGreaterThan(first)
+  })
+})

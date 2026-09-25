@@ -13,7 +13,7 @@ describe('formatSpan', () => {
 })
 
 describe('trackAgent', () => {
-  const doing = { title: 'Fix it', column: 'doing', doingSince: now - 5 * M }
+  const doing = { title: 'Fix it', column: 'doing', doingSince: now - 40 * M }
 
   it('says what it does and for how long', () => {
     expect(trackAgent({ state: 'working', since: now - 12 * M }, null, now)).toMatchObject({ text: 'Working · 12 min', level: 'ok' })
@@ -43,5 +43,22 @@ describe('trackAgent', () => {
     const long = { ...doing, doingSince: now - 75 * M }
     expect(trackAgent({ state: 'working', since: now - 2 * M }, long, now)).toMatchObject({ level: 'info', reason: 'Long-running task: on "Fix it" for 1 h 15.', onTask: '1 h 15' })
     expect(trackAgent({ state: 'limited', since: now, reset: '5pm' }, null, now)).toMatchObject({ text: 'Usage limit · resets 5pm', level: 'warn' })
+  })
+})
+
+describe('trackAgent (review fixes)', () => {
+  it('counts only the quiet time since the task began', () => {
+    // Idle 40 min, then given a task 1 min ago: not stuck on it.
+    const fresh = { title: 'New', column: 'doing', doingSince: now - 1 * M }
+    const t = trackAgent({ state: 'idle', since: now - 40 * M }, fresh, now)
+    expect(t.level).toBe('ok')
+    // 12 min into the task, still quiet: now it is.
+    const older = { title: 'New', column: 'doing', doingSince: now - 12 * M }
+    expect(trackAgent({ state: 'idle', since: now - 40 * M }, older, now)).toMatchObject({ level: 'warn', kind: 'quiet', minutes: 12 })
+  })
+  it('marks a time that began before Tessel started as a minimum', () => {
+    const t = trackAgent({ state: 'approval', since: now - 9 * M, sinceStart: true }, null, now)
+    expect(t.text).toBe('Waiting for your approval · 9 min+')
+    expect(t).toMatchObject({ kind: 'approval', level: 'warn' })
   })
 })

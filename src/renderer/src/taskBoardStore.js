@@ -30,6 +30,9 @@ export function updateTask(id, patch = {}) {
   if (!task) return null
   const rest = { ...patch }
   delete rest.id
+  // Entering Doing (from any column, by any path) starts a new period for
+  // agent tracking.
+  if (rest.column === 'doing' && task.column !== 'doing' && !('doingSince' in rest)) rest.doingSince = Date.now()
   Object.assign(task, rest)
   return task
 }
