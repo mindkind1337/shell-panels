@@ -7,6 +7,7 @@ import { createRequire } from 'module'
 import { ensureTeamChannel, pollTeamChannel } from '../teamChannel'
 import { takeTeamAcks } from '../teamAcks'
 import { writeCurrentTeams, retireOldTeams, addNotices } from '../teamNotices'
+import { publishTeamTasks, takeTeamRequests } from '../teamTasks'
 
 const require = createRequire(import.meta.url)
 const SERVER = join(__dirname, '..', 'teamMcp', 'server.cjs')
@@ -145,7 +146,14 @@ describe('Tessel team tools (background messages)', () => {
     const byId = Object.fromEntries(lines.map((l) => [l.id, l]))
     expect(byId[1].result.serverInfo.name).toBe('tessel-team')
     expect(byId[1].result.instructions).toMatch(/team_inbox/)
-    expect(byId[2].result.tools.map((t) => t.name)).toEqual(['team_inbox', 'team_send', 'team_members'])
+    expect(byId[2].result.tools.map((t) => t.name)).toEqual([
+      'team_inbox',
+      'team_send',
+      'team_members',
+      'team_tasks',
+      'team_task_add',
+      'team_task_move'
+    ])
     expect(byId[3].result.content[0].text).toMatch(/Sent to #4/)
     expect(byId[4].result.content[0].text).toMatch(/#1 Codex CLI \(you\)/)
     expect(lines.some((l) => l.id === undefined)).toBe(false) // no reply to the notification
@@ -364,4 +372,70 @@ for (let i = 0; i < 150; i++) n.writeCurrentTeams({ dir: ${JSON.stringify(dir)},
     expect(found('pane-a-149').teamId).toBe('team-a')
     expect(found('pane-b-149').teamId).toBe('team-b')
   }, 60000)
+})
+
+describe('the team board through the team tools', () => {
+  let dir
+  const teamId = 'team-1'
+  const A = { id: 'pane-1-aaaaaa', num: 1, title: 'Codex CLI' }
+  const B = { id: 'pane-4-bbbbbb', num: 4, title: 'Claude Code' }
+  beforeEach(() => {
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-board-'))
+    ensureTeamChannel({ dir, teamId, members: [A, B] })
+    writeCurrentTeams({ dir, panes: { [A.id]: { team: teamId, num: 1 }, [B.id]: { team: teamId, num: 4 } } })
+    process.env.TESSEL_PANE_ID = B.id
+    process.env.TESSEL_PROJECT_DIR = dir
+  })
+  afterEach(() => {
+    delete process.env.TESSEL_PANE_ID
+    delete process.env.TESSEL_PROJECT_DIR
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+  const call = (name, args = {}) => mcp.handle({ id: 1, method: 'tools/call', params: { name, arguments: args } })
+
+  it('asks Tessel to add and move cards; Tessel takes each request once', () => {
+    expect(call('team_task_add', { title: 'Review  terminal scroll', assignee: '#1', column: 'doing' }).isError).toBe(false)
+    expect(call('team_task_add', { title: 'Team view' }).isError).toBe(false) // for me
+    expect(call('team_task_move', { id: 'task-1-2', column: 'review' }).isError).toBe(false)
+    const res = takeTeamRequests({ dir, teamId })
+    expect(res.refused).toEqual([])
+    expect(res.requests).toEqual([
+      { fromId: B.id, action: 'add', title: 'Review terminal scroll', assignee: '#1', column: 'doing' },
+      { fromId: B.id, action: 'add', title: 'Team view', assignee: '#4', column: 'todo' },
+      { fromId: B.id, action: 'move', id: 'task-1-2', column: 'review' }
+    ])
+    expect(takeTeamRequests({ dir, teamId }).requests).toEqual([])
+  })
+
+  it('refuses a bad request at once', () => {
+    expect(call('team_task_add', { title: '' }).isError).toBe(true)
+    expect(call('team_task_add', { title: 'x', assignee: 'Codex' }).isError).toBe(true)
+    expect(call('team_task_move', { id: 'task-1', column: 'later' }).isError).toBe(true)
+    expect(takeTeamRequests({ dir, teamId }).requests).toEqual([])
+  })
+
+  it('a hand-written bad request file is refused, not applied', () => {
+    const folder = join(dir, '.tessel', 'team-channel', teamId, 'requests')
+    fs.mkdirSync(folder, { recursive: true })
+    fs.writeFileSync(join(folder, `${A.id}__x1.json`), JSON.stringify({ action: 'move', id: 'task-1', column: 'nowhere' }))
+    const res = takeTeamRequests({ dir, teamId })
+    expect(res.requests).toEqual([])
+    expect(res.refused[0].fromId).toBe(A.id)
+  })
+
+  it('lists the cards Tessel published', () => {
+    expect(call('team_tasks').content[0].text).toMatch(/No cards/)
+    publishTeamTasks({
+      dir,
+      teamId,
+      tasks: [
+        { id: 'task-1-2', title: 'Review terminal scroll', column: 'doing', assignee: '#1', since: 1 },
+        { id: 'task-2-3', title: 'Team view', column: 'todo', assignee: '#4' }
+      ]
+    })
+    const text = call('team_tasks').content[0].text
+    expect(text).toContain('To do:\n  task-2-3  Team view  (#4)')
+    expect(text).toContain('Doing:\n  task-1-2  Review terminal scroll  (#1)')
+    expect(publishTeamTasks({ dir, teamId, tasks: [{ id: 'task-2-3', title: 'Team view', column: 'todo', assignee: '#4' }, { id: 'task-1-2', title: 'Review terminal scroll', column: 'doing', assignee: '#1', since: 1 }] }).changed).toBe(true)
+  })
 })

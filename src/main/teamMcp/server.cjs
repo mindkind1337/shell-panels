@@ -6,6 +6,8 @@
 //   team_inbox()             new messages for me (then marked read)
 //   team_send({to, text})    to "#3" or "team"
 //   team_members()           who is in my team
+//   team_tasks() / team_task_add({title, assignee, column}) / team_task_move({id, column})
+//                            the team's task board (applied by Tessel)
 //
 // Tessel stays the only writer of the channel's state.json: this server only
 // reads it, sends by dropping a file into my outbox (Tessel takes it in), and
@@ -22,7 +24,7 @@
 const fs = require('fs')
 const path = require('path')
 
-const VERSION = '1.2.0'
+const VERSION = '1.3.0'
 const MAX_TEXT = 6000
 
 // --- Finding my team and me ---------------------------------------------------
@@ -206,6 +208,56 @@ function send(ctx, to, text, replyTo) {
   return { ok: true }
 }
 
+// --- Task board ------------------------------------------------------------------
+// Tessel publishes the team's cards in tasks.json; an agent asks for a change
+// by dropping a request file Tessel applies (it stays the board's only writer).
+
+const COLUMNS = ['todo', 'doing', 'review', 'done']
+const COLUMN_NAMES = { todo: 'To do', doing: 'Doing', review: 'Review', done: 'Done' }
+
+function listTasks(ctx) {
+  const data = readJson(path.join(ctx.root, 'tasks.json'))
+  const tasks = data && Array.isArray(data.tasks) ? data.tasks : []
+  if (!tasks.length) return 'No cards on the team board yet. Add one with team_task_add.'
+  return COLUMNS.map((c) => {
+    const here = tasks.filter((t) => t.column === c)
+    if (!here.length) return null
+    return `${COLUMN_NAMES[c]}:\n${here.map((t) => `  ${t.id}  ${t.title}${t.assignee ? `  (${t.assignee})` : ''}`).join('\n')}`
+  })
+    .filter(Boolean)
+    .join('\n')
+}
+
+function taskRequest(ctx, data) {
+  const folder = path.join(ctx.root, 'requests')
+  fs.mkdirSync(folder, { recursive: true })
+  const safeId = String(ctx.meId).replace(/[^A-Za-z0-9._-]/g, '_')
+  const name = `${safeId}__${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 8)}`
+  fs.writeFileSync(path.join(folder, `${name}.tmp`), JSON.stringify(data))
+  fs.renameSync(path.join(folder, `${name}.tmp`), path.join(folder, `${name}.json`))
+}
+
+function addTask(ctx, args) {
+  const title = String(args.title || '').replace(/\s+/g, ' ').trim()
+  if (!title) return { error: 'A card needs a "title".' }
+  if (title.length > 200) return { error: 'The title is too long (at most 200 characters).' }
+  const assignee = args.assignee == null || args.assignee === '' ? `#${ctx.me.num}` : String(args.assignee).trim()
+  if (!/^#\d{1,3}$/.test(assignee)) return { error: '"assignee" must be a teammate like "#3".' }
+  const column = String(args.column || 'todo').toLowerCase()
+  if (!COLUMNS.includes(column)) return { error: `"column" must be one of ${COLUMNS.join(', ')}.` }
+  taskRequest(ctx, { action: 'add', title, assignee, column })
+  return { ok: true }
+}
+
+function moveTask(ctx, args) {
+  const id = String(args.id || '').trim()
+  if (!/^[A-Za-z0-9._-]{1,100}$/.test(id)) return { error: 'Give the card "id" (see team_tasks).' }
+  const column = String(args.column || '').toLowerCase()
+  if (!COLUMNS.includes(column)) return { error: `"column" must be one of ${COLUMNS.join(', ')}.` }
+  taskRequest(ctx, { action: 'move', id, column })
+  return { ok: true }
+}
+
 function members(ctx) {
   return Object.entries(ctx.state.members)
     .filter(([, m]) => m.active)
@@ -244,6 +296,41 @@ const TOOLS = [
     name: 'team_members',
     description: 'List who is in your Tessel team.',
     inputSchema: { type: 'object', properties: { ...ME_ARG } }
+  },
+  {
+    name: 'team_tasks',
+    description:
+      "List the cards on your team's task board in Tessel (To do, Doing, Review, Done), with their ids and who does each.",
+    inputSchema: { type: 'object', properties: { ...ME_ARG } }
+  },
+  {
+    name: 'team_task_add',
+    description:
+      "Put a piece of work on your team's task board, so the user sees who does what. Add one card per task you take or give.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'What the task is, in a few words' },
+        assignee: { type: 'string', description: 'Who does it, like "#3" (default: you)' },
+        column: { type: 'string', enum: COLUMNS, description: 'Where it starts (default: todo)' },
+        ...ME_ARG
+      },
+      required: ['title']
+    }
+  },
+  {
+    name: 'team_task_move',
+    description:
+      'Move a card on the team board: to "doing" when you start it, "review" when it waits for a review, "done" when it is finished.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'The card id (see team_tasks)' },
+        column: { type: 'string', enum: COLUMNS },
+        ...ME_ARG
+      },
+      required: ['id', 'column']
+    }
   }
 ]
 
@@ -252,6 +339,13 @@ function callTool(name, args = {}) {
   if (ctx.error) return { text: ctx.error, isError: true }
   if (name === 'team_inbox') return { text: readInbox(ctx) || 'No new messages.' }
   if (name === 'team_members') return { text: members(ctx) }
+  if (name === 'team_tasks') return { text: listTasks(ctx) }
+  if (name === 'team_task_add' || name === 'team_task_move') {
+    const r = name === 'team_task_add' ? addTask(ctx, args) : moveTask(ctx, args)
+    return r.error
+      ? { text: r.error, isError: true }
+      : { text: 'Sent to Tessel: the board shows it within a few seconds (check with team_tasks).' }
+  }
   if (name === 'team_send') {
     const r = send(ctx, args.to, args.text, args.reply_to)
     return r.error ? { text: r.error, isError: true } : { text: `Sent to ${args.to}. Tessel delivers it in the background.` }
@@ -267,7 +361,7 @@ function handle(msg) {
       capabilities: { tools: {} },
       serverInfo: { name: 'tessel-team', version: VERSION },
       instructions:
-        'You may be working in a Tessel team with other agents. Call team_inbox when you start and after each step of your work to read messages from teammates, and answer them with team_send. Never ask the user to pass messages between agents.'
+        'You may be working in a Tessel team with other agents. Call team_inbox when you start and after each step of your work to read messages from teammates, and answer them with team_send. Never ask the user to pass messages between agents. Put each piece of work you take or give on the team board (team_task_add) and move its card as it goes (team_task_move), so the user sees who does what.'
     }
   }
   if (method === 'ping') return {}
@@ -346,4 +440,4 @@ if (require.main === module) {
   else serve()
 }
 
-module.exports = { locate, readInbox, send, members, handle, candidateDirs, ackPath, markRead, unread }
+module.exports = { locate, readInbox, send, members, handle, candidateDirs, ackPath, markRead, unread, listTasks, addTask, moveTask }

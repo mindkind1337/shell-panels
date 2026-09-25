@@ -426,7 +426,8 @@ onMounted(async () => {
 
           <p v-if="row.name === 'tessel-team'" class="mcp-about">
             <strong>Added by Tessel: team messages.</strong> Agents in the same team use it to talk to
-            each other in the background, so nothing is ever typed into your terminals. It does nothing
+            each other in the background, so nothing is ever typed into your terminals, and to put
+            the work they share on the team's task board (who does what). It does nothing
             for an agent that is not in a team. Claude Code also gets its new messages automatically
             (hooks in ~/.claude/settings.json). An agent that was already open uses it after a restart.
           </p>

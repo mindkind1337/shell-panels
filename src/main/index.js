@@ -26,6 +26,7 @@ import { reviewInfo, reviewDiff, reviewMerge, reviewRemove } from './review'
 import { takeTeamAcks } from './teamAcks'
 import { writeJsonSafe, readJsonSafe } from './safeJson'
 import { addNotices, writeCurrentTeams, retireOldTeams } from './teamNotices'
+import { publishTeamTasks, takeTeamRequests } from './teamTasks'
 import { writeServerScript, installClaudeHooks, installCodexServer, claudeServerPresent, SERVER_NAME } from './teamInstall'
 import teamServerSource from './teamMcp/server.cjs?raw'
 import { ensureInbox, takeInbox, removeInbox } from './leadInbox'
@@ -743,6 +744,8 @@ ipcMain.handle('team:notice', safe(addNotices))
 const TEAM_OWNER = crypto.createHash('sha1').update(app.getPath('userData').toLowerCase()).digest('hex').slice(0, 12)
 ipcMain.handle('team:current', safe((args) => writeCurrentTeams({ ...args, owner: TEAM_OWNER })))
 ipcMain.handle('team:retire', safe((args) => retireOldTeams({ ...args, owner: TEAM_OWNER })))
+ipcMain.handle('team:tasks', safe(publishTeamTasks))
+ipcMain.handle('team:requests', safe(takeTeamRequests))
 
 // A Codex config.toml Tessel is about to write, checked by Codex itself in a
 // throwaway CODEX_HOME. -> { ok, error }

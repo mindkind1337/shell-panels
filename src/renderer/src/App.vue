@@ -3602,6 +3602,71 @@ function logTeamMessages(team, res) {
   if (changed) activityChanged()
 }
 
+// The task board for the agents of a team (team_tasks / team_task_add /
+// team_task_move, src/main/teamTasks.js): their requests are applied here,
+// Tessel being the board's only writer, and the team's cards (those of its
+// workspace) are published back for them to read. A refused request is
+// told to its agent in the background.
+async function syncTeamBoard(team, dir, members) {
+  if (!window.shellApi.team || !window.shellApi.team.requests) return
+  const wsId = teamWsId(team.id)
+  const byNum = (n) => members.find((m) => m.num === Number(String(n).slice(1))) || null
+  const res = await window.shellApi.team.requests({ dir, teamId: team.id })
+  const refusals = []
+  if (res && res.ok) {
+    for (const r of res.refused || []) refusals.push({ fromId: r.fromId, text: `Your board request was not done: ${r.error}.` })
+    for (const r of res.requests || []) {
+      const from = members.find((m) => m.id === r.fromId)
+      if (!from) continue // not (or no longer) in this team
+      if (r.action === 'add') {
+        const who = r.assignee ? byNum(r.assignee) : from
+        if (!who) {
+          refusals.push({ fromId: from.id, text: `The card "${r.title}" was not added: ${r.assignee} is not in your team.` })
+          continue
+        }
+        const task = addTask({ title: r.title, wsId })
+        updateTask(task.id, { paneId: who.id, column: r.column, createdBy: from.id })
+        recordActivity({ type: 'task', action: 'added', paneId: who.id, agent: agentInfo(who), title: r.title, wsId, by: paneLabel(from) })
+      } else if (r.action === 'move') {
+        const task = boardTasks.find((t) => t.id === r.id)
+        if (!task || task.wsId !== wsId) {
+          refusals.push({ fromId: from.id, text: `No card ${r.id} on your team's board (see team_tasks).` })
+          continue
+        }
+        if (task.column === r.column) continue
+        updateTask(task.id, { column: r.column })
+        const owner = task.paneId ? findLeaf(task.paneId) : null
+        recordActivity({
+          type: 'task',
+          action: 'moved',
+          paneId: owner ? owner.id : from.id,
+          agent: agentInfo(owner || from),
+          title: task.title,
+          wsId,
+          by: paneLabel(from),
+          detail: { todo: 'To do', doing: 'Doing', review: 'Review', done: 'Done' }[r.column]
+        })
+      }
+    }
+  }
+  for (const r of refusals) {
+    const leaf = findLeaf(r.fromId)
+    if (leaf) tellAgents([leaf], `[Tessel] ${r.text}`, team.id)
+  }
+  const label = (paneId) => {
+    const leaf = paneId ? findLeaf(paneId) : null
+    return leaf && leaf.num ? `#${leaf.num}` : null
+  }
+  const cards = boardTasks
+    .filter((t) => t.wsId === wsId)
+    .map((t) => ({ id: t.id, title: t.title, column: t.column, assignee: label(t.paneId), since: t.doingSince || null }))
+  const sig = JSON.stringify(cards)
+  if (boardSigs[team.id] === sig) return
+  const pub = await window.shellApi.team.tasks({ dir, teamId: team.id, tasks: cards })
+  if (pub && pub.ok) boardSigs[team.id] = sig
+}
+const boardSigs = {} // teamId -> the cards last published
+
 async function deliverChannel(team, members) {
   const dir = channelDir(team)
   if (!dir || !window.shellApi.channel || !channelBoxes[team.id]) return
@@ -3628,6 +3693,7 @@ async function deliverChannel(team, members) {
       for (const m of members) wakeIfNeeded(m)
       logTeamMessages(team, res)
     }
+    await syncTeamBoard(team, dir, members)
     installTeamToolsOnce() // runs on its own (Claude and Codex take a while)
     restartForTeamTools()
     return

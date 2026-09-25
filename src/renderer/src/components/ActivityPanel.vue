@@ -159,6 +159,11 @@ function when(t) {
 function taskLine(x) {
   const t = `“${x.task}”`
   switch (x.action) {
+    // Cards the agents put on the team board and move themselves.
+    case 'added':
+      return { who: x.by || x.title, text: `put ${t} on the board`, note: `for ${x.title}` }
+    case 'moved':
+      return { who: x.by || x.title, text: `moved ${t} to ${x.detail}`, note: '' }
     case 'review':
       return { who: x.title, text: `finished the task ${t}`, note: x.detail || 'ready for your review' }
     case 'approved':
