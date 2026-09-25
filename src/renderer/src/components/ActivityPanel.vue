@@ -180,7 +180,7 @@ function taskLine(x) {
 function describe(x) {
   switch (x.kind) {
     case 'message': {
-      const who = x.source === 'tessel' ? 'Tessel' : x.source === 'lead' ? `${x.from || 'The lead'} (lead)` : 'You'
+      const who = x.source === 'tessel' ? 'Tessel' : x.source === 'lead' ? `${x.from || 'The lead'} (lead)` : x.source === 'agent' ? x.from || 'An agent' : 'You'
       const to = x.scope === 'team' ? ' (team)' : x.scope === 'workspace' ? ' (all agents)' : ''
       const how =
         x.status === 'held'

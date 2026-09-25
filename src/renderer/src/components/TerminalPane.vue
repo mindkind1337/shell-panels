@@ -103,16 +103,24 @@ function markActivity() {
   }, IDLE_AFTER_MS)
 }
 
-// The last `lines` non-empty rows on screen as plain text (a tall pane can
-// have its content at the top and blank rows below).
+// The last `lines` non-empty lines on screen as plain text (a tall pane can
+// have its content at the top and blank rows below). A line the terminal
+// wrapped over several rows (a narrow pane) comes back whole, so a word like
+// TASK_COMPLETE is never cut in two.
 function screenText(lines = 20) {
   if (!term) return ''
   const buf = term.buffer.active
   const out = []
-  for (let y = buf.baseY + term.rows - 1; y >= buf.baseY && out.length < lines; y--) {
+  let tail = ''
+  for (let y = buf.baseY + term.rows - 1; y >= 0 && out.length < lines; y--) {
     const line = buf.getLine(y)
-    const text = line ? line.translateToString(true) : ''
-    if (text.trim()) out.unshift(text)
+    if (!line) continue
+    tail = line.translateToString(!tail) + tail
+    // This row continues the one above it: keep collecting.
+    if (line.isWrapped && y > 0) continue
+    if (tail.trim()) out.unshift(tail)
+    tail = ''
+    if (y <= buf.baseY) break
   }
   return out.join('\n')
 }

@@ -1,7 +1,7 @@
-// A team lead's inbox: <project>/.tessel/lead/<token>/. The lead agent writes
+// A team member's inbox: <project>/.tessel/team/<token>/. The agent writes
 // request files there (see src/shared/leadRequests.js); Tessel takes them
-// (reads, then deletes) every few seconds. The token is random per lead, so
-// only the agent told about the folder writes into it.
+// (reads, then deletes) every few seconds. The token is random per member,
+// so only the agent told about the folder writes into it.
 import { join, resolve, isAbsolute } from 'path'
 import fs from 'fs'
 
@@ -12,7 +12,7 @@ const MAX_BYTES = 64 * 1024
 function inboxPath({ dir, token } = {}) {
   if (typeof dir !== 'string' || !dir || !isAbsolute(dir) || !fs.existsSync(dir)) return null
   if (typeof token !== 'string' || !TOKEN_RE.test(token)) return null
-  return join(resolve(dir), '.tessel', 'lead', token)
+  return join(resolve(dir), '.tessel', 'team', token)
 }
 
 // Make the folder (with a HOW-TO.md) and return its path.
@@ -78,7 +78,7 @@ export function takeInbox({ dir, token } = {}) {
   return { ok: true, items }
 }
 
-// The lead stepped down: remove its inbox.
+// The member left the team: remove its inbox.
 export function removeInbox({ dir, token } = {}) {
   const path = inboxPath({ dir, token })
   if (path && fs.existsSync(path)) fs.rmSync(path, { recursive: true, force: true })

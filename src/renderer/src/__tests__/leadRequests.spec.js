@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseLeadRequest, findTaskByTitle, leadGuide } from '../../../shared/leadRequests'
+import { parseLeadRequest, findTaskRef, leadGuide } from '../../../shared/leadRequests'
 
 describe('lead requests', () => {
   it('reads a task for a teammate or a new agent', () => {
@@ -38,11 +38,27 @@ describe('lead requests', () => {
   it('caps long text', () => {
     expect(parseLeadRequest({ action: 'message', to: 'team', text: 'x'.repeat(9000) }).text).toHaveLength(6000)
   })
-  it('finds a task by its title', () => {
-    const tasks = [{ title: 'Fix the header' }, { title: 'Fix the footer' }, { title: 'Docs' }]
-    expect(findTaskByTitle(tasks, 'fix the HEADER')).toBe(tasks[0])
-    expect(findTaskByTitle(tasks, 'Doc')).toBe(tasks[2])
-    expect(findTaskByTitle(tasks, 'Fix the')).toBe(null)
+  it('finds a task by id, then by title', () => {
+    const tasks = [
+      { id: 'task-1-1', title: 'Fix the header' },
+      { id: 'task-2-2', title: 'Fix the footer' },
+      { id: 'task-3-3', title: 'Docs' }
+    ]
+    expect(findTaskRef(tasks, 'task-2-2').task).toBe(tasks[1])
+    expect(findTaskRef(tasks, 'fix the HEADER').task).toBe(tasks[0])
+    expect(findTaskRef(tasks, 'Doc').task).toBe(tasks[2])
+    expect(findTaskRef(tasks, 'Fix the').error).toMatch(/matches 2 tasks.*use the task id/)
+    expect(findTaskRef(tasks, 'nothing')).toEqual({ error: null })
+  })
+  it('never picks one of two tasks with the same title', () => {
+    const tasks = [
+      { id: 'task-1-1', title: 'Fix tests' },
+      { id: 'task-2-2', title: 'Fix tests' }
+    ]
+    const r = findTaskRef(tasks, 'Fix tests')
+    expect(r.task).toBeUndefined()
+    expect(r.error).toMatch(/task-1-1, task-2-2/)
+    expect(findTaskRef(tasks, 'task-2-2').task).toBe(tasks[1])
   })
   it('explains the role', () => {
     const g = leadGuide({ teamName: 'Team 1', inbox: 'C:/p/.tessel/lead/abc', members: ['#2 Codex CLI'], kinds: ['codex', 'claude'] })
@@ -50,5 +66,21 @@ describe('lead requests', () => {
     expect(g).toMatch(/C:\/p\/.tessel\/lead\/abc/)
     expect(g).toMatch(/"codex", "claude"/)
     expect(g).toMatch(/do not merge/)
+  })
+})
+
+describe('team messages', () => {
+  it('reads "to": "lead"', () => {
+    expect(parseLeadRequest({ action: 'message', to: 'lead', text: 'done?' })).toMatchObject({ ok: true, to: 'lead' })
+  })
+  it('tells a member how to reach its teammates', async () => {
+    const { memberGuide } = await import('../../../shared/leadRequests')
+    const g = memberGuide({ teamName: 'Team 1', inbox: 'C:/p/.tessel/team/abc', me: '#4 Claude Code', members: ['#1 Codex CLI (codex)'], lead: '#1 Codex CLI' })
+    expect(g).toMatch(/You are #4 Claude Code/)
+    expect(g).toMatch(/#1 Codex CLI leads the team/)
+    expect(g).toMatch(/C:\/p\/.tessel\/team\/abc/)
+    expect(g).toMatch(/"to" can also be "team" \(everyone\) or "lead"/)
+    expect(g).toMatch(/do not ask the user to pass messages on/)
+    expect(memberGuide({ teamName: 'T', inbox: 'x', me: '#1 A', members: [], lead: null })).not.toMatch(/"lead"/)
   })
 })

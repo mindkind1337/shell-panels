@@ -47,13 +47,14 @@ export function parseLeadRequest(data) {
     if (!text) return { ok: false, error: 'a message needs a "text"' }
     const to = String(data.to == null ? '' : data.to).trim().toLowerCase()
     if (to === 'team' || to === 'all') return { ok: true, action, to: 'team', num: null, text }
+    if (to === 'lead') return { ok: true, action, to: 'lead', num: null, text }
     const num = paneNum(to)
-    if (num == null) return { ok: false, error: 'a message needs "to": "#3" or "team"' }
+    if (num == null) return { ok: false, error: 'a message needs "to": "#3", "team" or "lead"' }
     return { ok: true, action, to: 'one', num, text }
   }
   if (action === 'approve' || action === 'changes') {
     const task = str(data.task, MAX_TITLE)
-    if (!task) return { ok: false, error: `"${action}" needs the "task" title` }
+    if (!task) return { ok: false, error: `"${action}" needs the "task" id (or its title)` }
     const text = str(action === 'approve' ? data.note : data.text, MAX_TEXT)
     if (action === 'changes' && !text) return { ok: false, error: '"changes" needs a "text" saying what to change' }
     return { ok: true, action, task, text }
@@ -61,19 +62,37 @@ export function parseLeadRequest(data) {
   return { ok: false, error: `unknown action "${action || '(none)'}": use task, message, approve or changes` }
 }
 
-// Find a task by the title the lead wrote (exact, then case-insensitive,
-// then a unique prefix).
-export function findTaskByTitle(tasks, title) {
-  const t = String(title || '').trim()
-  const low = t.toLowerCase()
-  return (
-    tasks.find((x) => x.title === t) ||
-    tasks.find((x) => x.title.toLowerCase() === low) ||
-    (() => {
-      const hits = tasks.filter((x) => x.title.toLowerCase().startsWith(low))
-      return hits.length === 1 ? hits[0] : null
-    })()
-  )
+// Find the task a lead means: its id first, then its exact title, then the
+// title ignoring case, then a title prefix. Two tasks matching the same way is
+// ambiguous: then nothing is picked.
+// -> { task } | { error }
+export function findTaskRef(tasks, ref) {
+  const r = String(ref || '').trim()
+  if (!r) return { error: 'no task given' }
+  const byId = tasks.find((x) => x.id === r)
+  if (byId) return { task: byId }
+  const low = r.toLowerCase()
+  const rounds = [
+    (x) => x.title === r,
+    (x) => x.title.toLowerCase() === low,
+    (x) => x.title.toLowerCase().startsWith(low)
+  ]
+  for (const match of rounds) {
+    const hits = tasks.filter(match)
+    if (hits.length === 1) return { task: hits[0] }
+    if (hits.length > 1)
+      return { error: `"${r}" matches ${hits.length} tasks (${hits.map((x) => x.id).join(', ')}): use the task id` }
+  }
+  return { error: null }
+}
+
+// What every team member is told: how to reach its teammates without the
+// user relaying (also written as HOW-TO.md in its inbox).
+export function memberGuide({ teamName, inbox, me, members, lead }) {
+  return [
+    `Team "${teamName}". You are ${me}. Teammates: ${members.length ? members.join(', ') : 'none yet'}${lead ? `; ${lead} leads the team` : ''}.`,
+    `To talk to a teammate, write one JSON file into ${inbox} (any name ending in .json): {"action":"message","to":"#3","text":"..."}. "to" can also be "team" (everyone)${lead ? ' or "lead"' : ''}. Tessel delivers it into their terminal within a few seconds, and their answers reach you the same way. Talk to each other directly this way: do not ask the user to pass messages on.`
+  ].join('\n')
 }
 
 // What the lead is told when it takes the role (also written as HOW-TO.md in
@@ -85,9 +104,9 @@ export function leadGuide({ teamName, inbox, members, kinds }) {
     `To act, write one JSON file per request into ${inbox} (any name ending in .json). Tessel reads it within a few seconds, deletes it, and answers here with [Tessel] lines.`,
     '- Give a task: {"action":"task","title":"Short title","brief":"What to do, which files, how to check it","agent":"#3"}. "agent" is a teammate number, or ' +
       (kinds.length ? kinds.map((k) => `"${k}"`).join(', ') : 'an agent kind') +
-      ' to start a new agent. New agents work in their own copy (git branch); add "own_copy": false to work in the project folder.',
-    '- Message: {"action":"message","to":"#3","text":"..."} or "to":"team".',
-    '- After a teammate finishes, you get a review request. Then either {"action":"approve","task":"Short title","note":"why it is good"} (the user is told it is ready to merge) or {"action":"changes","task":"Short title","text":"what to fix"} (it goes back to the teammate).',
+      ' to start a new agent. New agents work in their own copy (git branch); if the project cannot have one, the request is refused: add "own_copy": false to work in the project folder instead.',
+    '- Message: {"action":"message","to":"#3","text":"..."} or "to":"team". Teammates write to you the same way; their messages appear here.',
+    '- After a teammate finishes, you get a review request with the task id. Then either {"action":"approve","task":"<task id>","note":"why it is good"} (the user is told it is ready to merge) or {"action":"changes","task":"<task id>","text":"what to fix"} (it goes back to the teammate).',
     'Keep tasks independent so teammates do not edit the same files at once.'
   ].join('\n')
 }
