@@ -1194,3 +1194,109 @@
   border-color: color-mix(in srgb, var(--ok) 45%, var(--border));
   color: var(--ok);
 }
+
+/* Tracking stays secondary to the agent and task names. */
+:root[data-theme='warp'] .ws-session-state {
+  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:root[data-theme='warp'] .ws-session-task {
+  min-width: 0;
+  margin-top: 1px;
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 1.4;
+  opacity: 1;
+}
+
+:root[data-theme='warp'] .ws-session-task.none {
+  font-style: normal;
+  opacity: 0.7;
+}
+
+:root[data-theme='warp'] .ws-session .ws-session-state.track-info {
+  color: var(--ui-accent);
+}
+
+:root[data-theme='warp'] .ws-session .ws-session-state.track-warn {
+  color: var(--warn);
+}
+
+:root[data-theme='warp'] .ws-session .ws-session-state.track-alert {
+  color: var(--danger);
+}
+
+:root[data-theme='warp'] .task-track {
+  min-width: 0;
+  gap: 3px;
+  margin-top: 5px;
+  padding-left: 7px;
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+:root[data-theme='warp'] .task-track-reason {
+  color: var(--text-dim);
+}
+
+:root[data-theme='warp'] .task-track.track-warn {
+  border-left-color: var(--warn);
+}
+
+:root[data-theme='warp'] .task-track.track-alert {
+  border-left-color: var(--danger);
+}
+
+:root[data-theme='warp'] .task-track.track-warn .task-track-reason {
+  color: var(--warn);
+}
+
+:root[data-theme='warp'] .task-track.track-alert .task-track-reason {
+  color: var(--danger);
+}
+
+:root[data-theme='warp'] .pane-stuck {
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 110px;
+  overflow: hidden;
+  padding: 0 5px;
+  border: 1px solid color-mix(in srgb, var(--warn) 32%, var(--border));
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--warn) 9%, var(--surface));
+  color: var(--warn);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+  text-overflow: ellipsis;
+}
+
+:root[data-theme='warp'] .pane-stuck.alert {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+  color: var(--danger);
+}
+
+:root[data-theme='warp'] .pane {
+  container: warp-pane / inline-size;
+}
+
+/* The task and full tracking details remain in Sessions and the task card. */
+@container warp-pane (max-width: 420px) {
+  :root[data-theme='warp'] .pane-nav-left:has(.pane-stuck) .pane-task {
+    display: none;
+  }
+}
+
+@container warp-pane (max-width: 300px) {
+  :root[data-theme='warp'] .pane-stuck {
+    display: none;
+  }
+}
