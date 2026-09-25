@@ -1,7 +1,7 @@
 <script setup>
-// Left sidebar: what needs you, then the workspaces, each with its agents.
-// A workspace is a project: its folder, its panes and the agents working in
-// it together. The sidebar only renders and emits intents: App owns the state.
+// Left sidebar: the workspaces, then "Sessions": every pane of the current one
+// with its state, grouped by team. A workspace is a project: its folder, its
+// panes and agents. The sidebar only renders and emits intents: App owns the state.
 import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import BrandIcon from './BrandIcon.vue'
 
@@ -12,9 +12,6 @@ const props = defineProps({
   currentId: { type: String, default: null },
   collapsed: { type: Boolean, default: false },
   width: { type: Number, default: 216 },
-  // "Needs you": [{ paneId, title, agentId, accent, kind: 'approval' | 'done'
-  //   | 'limited', text }]
-  inbox: { type: Array, default: () => [] },
   // Every pane of the current workspace, for "Sessions": [{ id, num, title,
   //   kind, agentId, shellId, accent, state, reset, held, active }]
   sessions: { type: Array, default: () => [] },
@@ -153,7 +150,6 @@ function stateText(m) {
   return STATE_TEXT[m.state]
 }
 
-const INBOX_ACTION = { approval: 'Show', done: 'Show', limited: 'Show' }
 
 // --- One message to every agent of a workspace -------------------------------
 const messagingId = ref(null)
@@ -375,28 +371,6 @@ defineExpose({
         </svg>
       </button>
     </div>
-
-    <section v-if="!collapsed && inbox.length" class="ws-inbox" aria-label="Needs you">
-      <div class="ws-inbox-head">
-        <span class="ws-inbox-title">Needs you</span>
-        <span class="ws-inbox-count">{{ inbox.length }}</span>
-      </div>
-      <div
-        v-for="n in inbox"
-        :key="n.paneId + n.kind"
-        class="ws-inbox-item"
-        :class="n.kind"
-      >
-        <BrandIcon :kind="n.agentId" :accent="n.accent" :label="n.title" :size="14" />
-        <span class="ws-inbox-body">
-          <span class="ws-inbox-name">{{ n.title }}</span>
-          <span class="ws-inbox-text">{{ n.text }}</span>
-        </span>
-        <button class="ws-inbox-btn" @click="emit('focus-pane', n.paneId)">
-          {{ INBOX_ACTION[n.kind] }}
-        </button>
-      </div>
-    </section>
 
     <div class="ws-list">
       <template v-for="item in items" :key="item.id">

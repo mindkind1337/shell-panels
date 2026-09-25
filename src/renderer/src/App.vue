@@ -2023,35 +2023,6 @@ function openActivity(scope = 'workspace') {
   activityOpen.value = true
 }
 
-// "Needs you": everything an agent is waiting on you for, across workspaces:
-// approval prompts first, then finished work, then usage limits.
-const inboxItems = computed(() => {
-  const out = []
-  const many = workspaces.value.length > 1
-  for (const ws of workspaces.value) {
-    forEachLeaf(ws.tree, (leaf) => {
-      if (leaf.kind !== 'agent') return
-      const where = many ? ` · ${ws.name}` : ''
-      const base = {
-        paneId: leaf.id,
-        title: leaf.title || 'Agent',
-        agentId: leaf.agentId,
-        accent: leaf.accent
-      }
-      if (approvals[leaf.id]) {
-        out.push({ ...base, kind: 'approval', rank: 0, text: `Asks for your approval${where}` })
-      } else if (attention[leaf.id]) {
-        out.push({ ...base, kind: 'done', rank: 1, text: `Finished, waiting for you${where}` })
-      } else if (limits[leaf.id]) {
-        const r = limits[leaf.id].reset
-        const when = r ? (/^in /.test(r) ? ` · resets ${r}` : ` · resets at ${r}`) : ''
-        out.push({ ...base, kind: 'limited', rank: 2, text: `Usage limit${when}${where}` })
-      }
-    })
-  }
-  return out.sort((a, b) => a.rank - b.rank)
-})
-
 // --- Messages to agents ------------------------------------------------------------
 // An agent showing an approval prompt: typing into it could answer it, so a
 // message waits until the prompt is gone.
@@ -3194,7 +3165,6 @@ onBeforeUnmount(() => {
         :current-id="currentWsId"
         :collapsed="sidebarCollapsed"
         :width="sidebarWidth"
-        :inbox="inboxItems"
         :sessions="sessionItems"
         :teams="teams"
         @create-team="createTeam"
