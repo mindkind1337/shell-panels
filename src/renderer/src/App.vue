@@ -2616,6 +2616,8 @@ async function setTeamLead(teamId, leafId) {
       })
     )
     if (!box) {
+      // Not the lead after all: the poll tells it about the channel instead.
+      if (team.channelTold) delete team.channelTold[leaf.id]
       showToast(`Could not make ${leaf.title}'s inbox, so it is not the lead. Check that the project folder can be written to.`, {
         kind: 'error',
         timeout: 8000
