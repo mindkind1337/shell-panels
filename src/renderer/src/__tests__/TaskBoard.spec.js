@@ -125,19 +125,22 @@ describe('TaskCard.vue', () => {
     expect(wrapper.get('[data-test="card-status"]').text().toLowerCase()).toContain('doing')
   })
 
-  it('moves to the next and previous column, clamped at the ends', async () => {
+  it('is moved by dragging only (no arrow buttons)', async () => {
     const { wrapper, task } = mountCard({ column: 'todo' })
-    expect(wrapper.get('[data-test="move-prev"]').attributes('disabled')).toBeDefined()
-
-    await wrapper.get('[data-test="move-next"]').trigger('click')
-    expect(task.column).toBe('doing')
-    await wrapper.get('[data-test="move-prev"]').trigger('click')
-    expect(task.column).toBe('todo')
+    expect(wrapper.find('[data-test="move-prev"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="move-next"]').exists()).toBe(false)
+    const data = {}
+    const dataTransfer = { setData: (k, v) => (data[k] = v), effectAllowed: '' }
+    await wrapper.get('[data-test="task-card"]').trigger('dragstart', { dataTransfer })
+    expect(data['application/x-tessel-task']).toBe(task.id)
   })
 
-  it('disables next on the last column', () => {
-    const { wrapper } = mountCard({ column: 'done' })
-    expect(wrapper.get('[data-test="move-next"]').attributes('disabled')).toBeDefined()
+  it('does not start a drag from its agent menu', async () => {
+    const { wrapper } = mountCard({ column: 'todo' })
+    const data = {}
+    const dataTransfer = { setData: (k, v) => (data[k] = v), effectAllowed: '' }
+    await wrapper.get('[data-test="assign-select"]').trigger('dragstart', { dataTransfer })
+    expect(data).toEqual({})
   })
 
   it('edits the title and saves it back to the store', async () => {

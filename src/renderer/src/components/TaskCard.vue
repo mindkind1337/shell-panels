@@ -1,13 +1,13 @@
 <script setup>
 // A single kanban task. Renders its title + current column and drives the shared
-// task-board store directly (the brief: the card consumes the store) — moving it
-// between columns, renaming it, deleting it, and assigning it to an agent pane.
+// task-board store directly (the brief: the card consumes the store) — renaming
+// it, deleting it, and assigning it to an agent pane. It moves between columns
+// by dragging it (TaskBoard takes the drop).
 // It only ever reads/writes its own `task`, so a change to one card never forces
 // its siblings to re-render.
 
 import { ref, computed, nextTick } from 'vue'
-import { COLUMNS } from '../../../shared/taskModel'
-import { moveTask, updateTask, removeTask, assignAgent } from '../taskBoardStore'
+import { updateTask, removeTask, assignAgent } from '../taskBoardStore'
 import BrandIcon from './BrandIcon.vue'
 
 const props = defineProps({
@@ -20,26 +20,19 @@ const props = defineProps({
 
 const emit = defineEmits(['focus-pane', 'review'])
 
-const colIndex = computed(() => COLUMNS.indexOf(props.task.column))
-const canPrev = computed(() => colIndex.value > 0)
-const canNext = computed(() => colIndex.value > -1 && colIndex.value < COLUMNS.length - 1)
-
 // Drag a card to another column (the arrows stay, for the keyboard).
 const TASK_DRAG_TYPE = 'application/x-tessel-task' // same type in TaskBoard.vue
 const dragging = ref(false)
 function onDragStart(e) {
-  if (editing.value || !e.dataTransfer) return e.preventDefault()
+  // Not from its controls (the agent menu, the buttons, the title being
+  // edited): those keep working normally.
+  const fromControl = e.target && e.target.closest && e.target.closest('select, input, button, textarea')
+  if (editing.value || fromControl || !e.dataTransfer) return e.preventDefault()
   e.dataTransfer.setData(TASK_DRAG_TYPE, props.task.id)
   e.dataTransfer.effectAllowed = 'move'
   dragging.value = true
 }
 
-function movePrev() {
-  if (canPrev.value) moveTask(props.task.id, COLUMNS[colIndex.value - 1])
-}
-function moveNext() {
-  if (canNext.value) moveTask(props.task.id, COLUMNS[colIndex.value + 1])
-}
 
 // --- Inline title editing (mirrors the pane-title pattern in TerminalPane) ----
 const editing = ref(false)
@@ -115,8 +108,22 @@ function paneLabel(pane) {
         @dblclick="startEdit"
         >{{ task.title }}</span
       >
-      <button class="task-btn" title="Rename task" data-test="edit-title" @click="startEdit">
-        edit
+      <button
+        class="task-btn task-edit-btn"
+        title="Rename task"
+        aria-label="Rename task"
+        data-test="edit-title"
+        @click="startEdit"
+      >
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path
+            d="M11.1 2.6a1.5 1.5 0 0 1 2.1 0l.2.2a1.5 1.5 0 0 1 0 2.1L6 12.3 2.8 13.2l.9-3.2 7.4-7.4Z"
+            stroke="currentColor"
+            stroke-width="1.3"
+            stroke-linejoin="round"
+          />
+          <path d="M9.8 3.9l2.3 2.3" stroke="currentColor" stroke-width="1.3" />
+        </svg>
       </button>
     </div>
 
@@ -171,25 +178,6 @@ function paneLabel(pane) {
       >
         Show agent
       </button>
-      <button
-        class="task-btn"
-        title="Move to previous column"
-        data-test="move-prev"
-        :disabled="!canPrev"
-        @click="movePrev"
-      >
-        ◀
-      </button>
-      <button
-        class="task-btn"
-        title="Move to next column"
-        data-test="move-next"
-        :disabled="!canNext"
-        @click="moveNext"
-      >
-        ▶
-      </button>
-
       <select
         v-model="selectedPane"
         class="task-assign"

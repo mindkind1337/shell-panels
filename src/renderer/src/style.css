@@ -1069,8 +1069,13 @@ button {
   border-color: transparent;
 }
 
+/* The pencil (rename): always there, brighter on hover. */
 .task-card-top .task-btn {
-  opacity: 0;
+  flex: 0 0 auto;
+  min-width: 24px;
+  padding: 0;
+  border-color: transparent;
+  opacity: 0.55;
   transition: opacity 0.12s;
 }
 
