@@ -32,6 +32,55 @@ describe('persistent team channel', () => {
 
   const put = (box, name, data) => fs.writeFileSync(join(box, `${name}.json`), JSON.stringify(data))
 
+  it('counts a later recipient beyond a full batch of unread delivery receipts', () => {
+    const stateFile = join(dirname(dirname(outboxes['pane-a'])), 'state.json')
+    const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'))
+    state.messages = Array.from({ length: 200 }, (_, i) => ({
+      id: `receipt-${i}`,
+      fromId: 'tessel',
+      toId: 'pane-a',
+      text: 'Delivered to #2 Claude.',
+      status: 'pending'
+    }))
+    fs.writeFileSync(stateFile, JSON.stringify(state))
+    put(outboxes['pane-a'], 'later', { to: '#3', text: 'Please review my change.' })
+    const res = pollTeamChannel({ dir, teamId })
+    expect(res.deliveries).toHaveLength(200)
+    expect(res.deliveries.some((m) => m.toId === 'pane-c')).toBe(false)
+    expect(res.unreadCounts).toEqual({ 'pane-c': 1 })
+    expect(pollTeamChannel({ dir, teamId, availableIds: [] }).unreadCounts).toEqual({ 'pane-c': 1 })
+    const message = res.history.find((m) => m.toId === 'pane-c')
+    expect(ackTeamDelivery({ dir, teamId, id: message.id, toId: 'pane-c' }).ok).toBe(true)
+    expect(pollTeamChannel({ dir, teamId }).unreadCounts).toEqual({})
+  })
+
+  it('counts held messages and their blocked backlog, but not inactive members', () => {
+    put(outboxes['pane-a'], '01-first', { to: '#2', text: 'First' })
+    put(outboxes['pane-a'], '02-next', { to: '#2', text: 'Second' })
+    put(outboxes['pane-a'], '03-other', { to: '#3', text: 'Third' })
+    const first = pollTeamChannel({ dir, teamId }).deliveries[0]
+    const request = { dir, teamId, id: first.id, toId: 'pane-b' }
+    for (const state of ['inflight', 'uncertain']) {
+      expect(holdTeamDelivery({ ...request, state }).ok).toBe(true)
+      const res = pollTeamChannel({ dir, teamId, availableIds: [] })
+      expect(res.deliveries).toEqual([])
+      expect(res.unreadCounts).toEqual({ 'pane-b': 2, 'pane-c': 1 })
+    }
+    ensureTeamChannel({ dir, teamId, members: [members[0], members[2]] })
+    expect(pollTeamChannel({ dir, teamId }).unreadCounts).toEqual({ 'pane-c': 1 })
+    ensureTeamChannel({ dir, teamId, members })
+    expect(pollTeamChannel({ dir, teamId }).unreadCounts).toEqual({ 'pane-b': 2, 'pane-c': 1 })
+  })
+
+  it('counts system errors and ordinary messages that resemble a receipt', () => {
+    put(outboxes['pane-a'], 'bad', { to: '#99', text: 'Invalid recipient' })
+    put(outboxes['pane-b'], 'ordinary', {
+      to: '#1',
+      text: 'Delivered to the customer; please review.'
+    })
+    expect(pollTeamChannel({ dir, teamId }).unreadCounts).toEqual({ 'pane-a': 2 })
+  })
+
   it('delivers a direct message and a reply with persistent acknowledgements', () => {
     put(outboxes['pane-a'], 'one', { to: '#2', text: 'Please review this.' })
     const first = pollTeamChannel({ dir, teamId })

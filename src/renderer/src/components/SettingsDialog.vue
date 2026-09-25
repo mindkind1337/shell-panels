@@ -1,7 +1,7 @@
 <script setup>
 // Preferences dialog. Edits the shared `settings` store directly, so every
 // change applies live to all panes and is saved automatically.
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import BrandIcon from './BrandIcon.vue'
 import { settings, FONT_FAMILIES, resetSettings, clamp } from '../settings'
 import { THEMES } from '../themes'
@@ -34,9 +34,61 @@ function updateText(u) {
 
 const cardEl = ref(null)
 const languages = ref([])
+let previousFocus
+const inertSiblings = []
+
+function focusCard() {
+  cardEl.value?.focus({ preventScroll: true })
+}
+
+function containFocus(event) {
+  if (cardEl.value && !cardEl.value.contains(event.target)) focusCard()
+}
+
+function trapTab(event) {
+  const card = cardEl.value
+  const controls = [
+    ...card.querySelectorAll('button, input, select, textarea, a[href], [tabindex]')
+  ].filter((el) => {
+    const style = getComputedStyle(el)
+    return (
+      el.tabIndex >= 0 &&
+      !el.matches(':disabled') &&
+      !el.closest('[hidden], [inert]') &&
+      style.display !== 'none' &&
+      style.visibility !== 'hidden'
+    )
+  })
+  const first = controls[0]
+  const last = controls.at(-1)
+  if (!first || document.activeElement === card) {
+    event.preventDefault()
+    ;(event.shiftKey ? last : first)?.focus()
+  } else if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
+  }
+}
 
 onMounted(async () => {
-  if (cardEl.value) cardEl.value.focus()
+  previousFocus = document.activeElement
+  // Make every branch outside this modal inert, including live xterm inputs.
+  // Keep existing inert attributes intact when the dialog closes.
+  let branch = cardEl.value?.parentElement
+  while (branch && branch !== document.body) {
+    for (const sibling of branch.parentElement?.children || []) {
+      if (sibling !== branch && !sibling.hasAttribute('inert')) {
+        sibling.setAttribute('inert', '')
+        inertSiblings.push(sibling)
+      }
+    }
+    branch = branch.parentElement
+  }
+  document.addEventListener('focusin', containFocus)
+  focusCard()
   if (window.shellApi.inputLanguages) {
     try {
       languages.value = (await window.shellApi.inputLanguages()) || []
@@ -44,6 +96,12 @@ onMounted(async () => {
       languages.value = []
     }
   }
+})
+
+onUnmounted(() => {
+  document.removeEventListener('focusin', containFocus)
+  for (const sibling of inertSiblings) sibling.removeAttribute('inert')
+  if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true })
 })
 
 function stepFont(d) {
@@ -70,12 +128,19 @@ const CURSORS = [
       class="help-card settings-card"
       role="dialog"
       aria-label="Settings"
+      aria-modal="true"
       tabindex="-1"
+      @keydown.tab.stop="trapTab"
       @keydown.escape.prevent.stop="emit('close')"
     >
       <div class="help-head">
         <span>Settings</span>
-        <button class="tb-icon" title="Close (Esc)" @click="emit('close')">
+        <button
+          class="tb-icon"
+          aria-label="Close settings"
+          title="Close (Esc)"
+          @click="emit('close')"
+        >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <path
               d="M4 4l8 8M12 4l-8 8"
@@ -105,8 +170,8 @@ const CURSORS = [
       <section class="set-section">
         <h3>Text</h3>
         <div class="set-row">
-          <div class="set-label">Font</div>
-          <select v-model="settings.fontFamily" class="set-select">
+          <label class="set-label" for="settings-font">Font</label>
+          <select id="settings-font" v-model="settings.fontFamily" class="set-select">
             <option v-for="f in FONT_FAMILIES" :key="f" :value="f">{{ f }}</option>
           </select>
         </div>
@@ -122,13 +187,14 @@ const CURSORS = [
           </div>
         </div>
         <div class="set-row">
-          <div class="set-label">Cursor</div>
-          <div class="launch-seg set-seg">
+          <div id="settings-cursor-label" class="set-label">Cursor</div>
+          <div class="launch-seg set-seg" role="group" aria-labelledby="settings-cursor-label">
             <button
               v-for="c in CURSORS"
               :key="c.id"
               class="launch-seg-btn"
               :class="{ on: settings.cursorStyle === c.id }"
+              :aria-pressed="settings.cursorStyle === c.id"
               @click="settings.cursorStyle = c.id"
             >
               {{ c.label }}
@@ -153,12 +219,13 @@ const CURSORS = [
       <section class="set-section">
         <h3>Terminal</h3>
         <div class="set-row">
-          <div class="set-label">
+          <label class="set-label" for="settings-shell">
             Default shell <span class="set-hint">Agents run in it too</span>
-          </div>
+          </label>
           <div class="set-shell">
             <BrandIcon :kind="defaultShell || ''" :size="15" />
             <select
+              id="settings-shell"
               class="set-select"
               :value="defaultShell"
               @change="emit('set-default-shell', $event.target.value)"
@@ -168,10 +235,11 @@ const CURSORS = [
           </div>
         </div>
         <div class="set-row">
-          <div class="set-label">
+          <label class="set-label" for="settings-scrollback">
             Scrollback lines <span class="set-hint">Applies to new panes</span>
-          </div>
+          </label>
           <input
+            id="settings-scrollback"
             class="set-number"
             type="number"
             min="500"
@@ -241,14 +309,15 @@ const CURSORS = [
       <section class="set-section">
         <h3>Voice typing</h3>
         <div class="set-row">
-          <div class="set-label">
+          <label class="set-label" for="settings-language">
             Language
             <span class="set-hint"
               >Windows dictation listens in one language. The mic button switches to this one first.
               Add languages in Windows Settings, Time &amp; language.</span
             >
-          </div>
+          </label>
           <select
+            id="settings-language"
             v-model="settings.voiceTip"
             class="set-select"
             @change="settings.voiceTipChosen = true"

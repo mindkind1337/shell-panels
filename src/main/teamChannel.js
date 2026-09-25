@@ -246,6 +246,15 @@ export function pollTeamChannel({ dir, teamId, availableIds } = {}) {
     ingest(root, state)
     const available = Array.isArray(availableIds) ? new Set(availableIds) : null
     const held = state.messages.filter((m) => isHeld(m) && state.members[m.toId]?.active)
+    // Background inbox readers are not limited by the terminal delivery batch.
+    // Count all unread messages, including holds and unavailable recipients,
+    // so a busy member's backlog cannot hide another member's wake-up.
+    const unreadCounts = Object.create(null)
+    for (const m of state.messages) {
+      if (!state.members[m.toId]?.active || (m.status !== 'pending' && !isHeld(m))) continue
+      if (m.fromId === 'tessel' && /^Delivered to /.test(m.text)) continue
+      unreadCounts[m.toId] = (unreadCounts[m.toId] || 0) + 1
+    }
     const blocked = new Set(held.map((m) => m.toId))
     const deliveries = state.messages
       .filter(
@@ -262,7 +271,14 @@ export function pollTeamChannel({ dir, teamId, availableIds } = {}) {
       title: m.title,
       active: !!m.active
     }))
-    return { ok: true, participants, deliveries, held, history: state.messages.slice(-200) }
+    return {
+      ok: true,
+      participants,
+      deliveries,
+      held,
+      unreadCounts,
+      history: state.messages.slice(-200)
+    }
   } catch (err) {
     return { ok: false, error: err.message }
   }
