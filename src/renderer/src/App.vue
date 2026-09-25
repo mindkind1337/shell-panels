@@ -2125,7 +2125,10 @@ function flushPending() {
     queue.forEach((item, i) =>
       setTimeout(() => {
         pane.paste(item.text)
-        setTimeout(() => pane.submit(), 500)
+        setTimeout(() => {
+          pane.submit()
+          if (item.meta && item.meta.onDelivered) item.meta.onDelivered()
+        }, 500)
         if (item.held) logMessage(id, 'delivered', item.text, item.meta)
       }, i * 1500)
     )
@@ -2195,12 +2198,11 @@ function taskPrompt(task, ws) {
     : `You work directly in the project folder ${(ws && ws.cwd) || ''}. Other agents may work there too: check .tessel/notes.md before editing shared files.`
   const lead = task.teamId ? teamLead(task.teamId) : null
   const tm = task.teamId ? teamById(task.teamId) : null
-  const token = tm && tm.inboxes && task.paneId ? tm.inboxes[task.paneId] : null
-  const dir = tm ? teamDir(tm.id) : null
+  const box = tm && task.paneId && channelBoxes[tm.id] ? channelBoxes[tm.id][task.paneId] : null
   const team = tm
     ? `You are in team "${tm.name}"` +
       (lead ? `, led by ${paneLabel(lead)}: it gave you this task and reviews your work when you finish. Ask it if something is unclear.` : '.') +
-      (token && dir ? ` To message your teammates${lead ? ' or lead' : ''}, write a JSON file into ${inboxPathFor(dir, token)}: {"action":"message","to":"${lead ? 'lead' : 'team'}","text":"..."}.` : '') +
+      (box ? `\n${box.guide}` : '') +
       '\n\n'
     : ''
   return (
@@ -2281,7 +2283,7 @@ async function startTask(spec, opts = {}) {
     const before = teamMembers(opts.teamId)
     leaf.team = opts.teamId
     logMembership(leaf, opts.teamId)
-    await assignInbox(teamById(opts.teamId), leaf)
+    await syncChannel(teamById(opts.teamId), { quiet: [leaf.id] })
     tellAgents(before, `[Tessel] Team "${teamById(opts.teamId).name}": ${paneLabel(leaf)} joined the team.`, opts.teamId)
   }
   updateTask(task.id, { paneId: leaf.id })
@@ -2822,12 +2824,9 @@ async function pollTeams() {
       for (const m of members) {
         const token = team.inboxes && team.inboxes[m.id]
         if (token && inboxesBeingMade.has(token)) continue
-        if (!token) {
-          // A team from before inboxes existed: set one up and say how.
-          const box = await assignInbox(team, m)
-          if (box) tellAgents([m], `[Tessel] Team "${team.name}": ${box.guide}`, team.id)
-          continue
-        }
+        // Plain members message through the team channel; only the lead
+        // (and members told about an inbox before) have one.
+        if (!token) continue
         const res = await window.shellApi.lead.take({ dir, token })
         // Its folder is gone (deleted by hand?): make it again next round.
         if (res && res.ok && res.missing) {
@@ -2855,9 +2854,79 @@ async function pollTeams() {
           waitIdle: true
         })
       }
+      await syncChannel(team)
+      await deliverChannel(team, members)
     }
   } finally {
     teamPolling = false
+  }
+}
+
+// --- Team channel ------------------------------------------------------------------
+// Durable messages between teammates (src/main/teamChannel.js, by Codex): each
+// agent has an outbox folder; a message waits on disk until it has been pasted
+// into its recipient's terminal, then Tessel acknowledges it (and the sender
+// gets a receipt). Unacknowledged messages come back after a restart.
+const channelBoxes = {} // teamId -> { leafId: { outbox, guide } }
+const channelSigs = {} // teamId -> membership last sent to ensure()
+const channelQueued = new Set() // deliveries queued in this session
+
+// Keep the channel's members in step with the team; tell members about a new
+// outbox (except `quiet` ones, told another way).
+async function syncChannel(team, opts = {}) {
+  if (!team || !window.shellApi.channel) return null
+  const dir = teamDir(team.id)
+  if (!dir) return null
+  const members = teamMembers(team.id).filter((l) => l.kind === 'agent' && l.num)
+  const sig = members.map((m) => `${m.id}:${m.num}:${m.title}`).join('|')
+  if (channelSigs[team.id] !== sig || !channelBoxes[team.id]) {
+    const res = await window.shellApi.channel.ensure({
+      dir,
+      teamId: team.id,
+      members: members.map((m) => ({ id: m.id, num: m.num, title: m.title || 'Agent' }))
+    })
+    if (!res || !res.ok) return null
+    channelSigs[team.id] = sig
+    channelBoxes[team.id] = Object.fromEntries(res.outboxes.map((o) => [o.id, { outbox: o.outbox, guide: o.guide }]))
+  }
+  const boxes = channelBoxes[team.id]
+  if (!team.channelTold) team.channelTold = {}
+  for (const m of members) {
+    const box = boxes[m.id]
+    if (!box || team.channelTold[m.id] === box.outbox) continue
+    team.channelTold[m.id] = box.outbox
+    if (opts.quiet && opts.quiet.includes(m.id)) continue
+    tellAgents([m], `[Tessel] Team "${team.name}": talk to your teammates directly through the team channel, not through the user.\n${box.guide}`, team.id)
+  }
+  for (const id of Object.keys(team.channelTold)) if (!boxes[id]) delete team.channelTold[id]
+  return boxes
+}
+
+async function deliverChannel(team, members) {
+  const dir = teamDir(team.id)
+  if (!dir || !window.shellApi.channel || !channelBoxes[team.id]) return
+  const res = await window.shellApi.channel.poll({ dir, teamId: team.id, availableIds: members.map((m) => m.id) })
+  if (!res || !res.ok) return
+  const who = Object.fromEntries((res.participants || []).map((p) => [p.id, p]))
+  for (const d of res.deliveries) {
+    const key = `${team.id}:${d.id}:${d.toId}`
+    if (channelQueued.has(key)) continue
+    // Out of usage: it stays on disk until the agent can read it.
+    if (limits[d.toId] || !findLeaf(d.toId)) continue
+    channelQueued.add(key)
+    const from = who[d.fromId]
+    const text =
+      d.fromId === 'tessel'
+        ? `[Tessel] ${d.text}`
+        : `[From #${from ? from.num : '?'} ${from ? from.title : 'teammate'}, team "${team.name}", message ${d.id}${d.replyTo ? `, reply to ${d.replyTo}` : ''}] ${d.text}`
+    deliverToAgent(d.toId, text, {
+      source: d.fromId === 'tessel' ? 'tessel' : 'agent',
+      scope: 'team',
+      teamId: team.id,
+      from: from ? from.title : null,
+      waitIdle: true,
+      onDelivered: () => window.shellApi.channel.ack({ dir, teamId: team.id, id: d.id, toId: d.toId })
+    })
   }
 }
 const leadTimer = setInterval(pollTeams, 2500)
@@ -3029,7 +3098,7 @@ async function tellTeam(teamId, text, opts = {}) {
     tellAgents(members, `[Tessel] Team "${team.name}": ${text}`, teamId)
     return
   }
-  for (const leaf of members) if (!opts.only || opts.only.includes(leaf.id)) reserveInbox(team, leaf)
+  const boxes = (await syncChannel(team, { quiet: members.map((l) => l.id) })) || {}
   const ws = wsOfLeaf(members[0].id)
   const dir = (ws && ws.cwd) || members[0].startDir
   let notes = ''
@@ -3040,7 +3109,7 @@ async function tellTeam(teamId, text, opts = {}) {
   for (const leaf of members) {
     if (opts.only && !opts.only.includes(leaf.id)) continue
     const mates = members.filter((l) => l.id !== leaf.id).map(agentLabel)
-    const box = await assignInbox(team, leaf)
+    const box = boxes[leaf.id]
     tellAgents(
       [leaf],
       `[Tessel] You are now in team "${team.name}"` +
@@ -3049,7 +3118,7 @@ async function tellTeam(teamId, text, opts = {}) {
           ? ` Shared notes: ${notes} . Read them, agree there on who does what, and add a dated line to their Journal for each notable change.`
           : '') +
         ' Before editing a file a teammate may be editing, check with them. Do not commit the notes file.' +
-        (box ? `\n${box.guide.split('\n').slice(1).join('\n')}` : ''),
+        (box ? `\nTalk to your teammates directly through the team channel, not through the user.\n${box.guide}` : ''),
       teamId
     )
   }

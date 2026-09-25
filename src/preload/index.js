@@ -51,6 +51,12 @@ const api = {
     take: (args) => ipcRenderer.invoke('lead:take', args),
     remove: (args) => ipcRenderer.invoke('lead:remove', args)
   },
+  // Durable team messages (src/main/teamChannel.js): { dir, teamId, ... }.
+  channel: {
+    ensure: (args) => ipcRenderer.invoke('channel:ensure', args),
+    poll: (args) => ipcRenderer.invoke('channel:poll', args),
+    ack: (args) => ipcRenderer.invoke('channel:ack', args)
+  },
   review: {
     info: (args) => ipcRenderer.invoke('review:info', args),
     diff: (args) => ipcRenderer.invoke('review:diff', args),
