@@ -117,3 +117,22 @@ describe('taskBoardPersistence', () => {
     })
   })
 })
+
+describe('surviving a kill mid-write', () => {
+  it('falls back to the previous copy when the file is empty or damaged', async () => {
+    const os = await import('os')
+    const path = await import('path')
+    const fsm = await import('fs')
+    const { loadTasks: load, saveTasks: save } = await import('../taskBoardPersistence')
+    const d = fsm.mkdtempSync(path.join(os.tmpdir(), 'tessel-tb-'))
+    save(d, [{ id: 'a' }])
+    save(d, [{ id: 'a' }, { id: 'b' }]) // the first save is now the .bak
+    const file = path.join(d, 'task-board.json')
+    fsm.writeFileSync(file, '') // cut by a kill
+    expect(load(d)).toEqual([{ id: 'a' }])
+    fsm.writeFileSync(file, '[{"id":')
+    expect(load(d)).toEqual([{ id: 'a' }])
+    expect(fsm.readdirSync(d).some((n) => n.startsWith('task-board.json.corrupt-'))).toBe(true)
+    fsm.rmSync(d, { recursive: true, force: true })
+  })
+})

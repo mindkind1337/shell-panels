@@ -24,6 +24,7 @@ import {
 } from './agentTools'
 import { reviewInfo, reviewDiff, reviewMerge, reviewRemove } from './review'
 import { takeTeamAcks } from './teamAcks'
+import { writeJsonSafe, readJsonSafe } from './safeJson'
 import { addNotices, writeCurrentTeams, retireOldTeams } from './teamNotices'
 import { writeServerScript, installClaudeHooks, installCodexServer, claudeServerPresent, SERVER_NAME } from './teamInstall'
 import teamServerSource from './teamMcp/server.cjs?raw'
@@ -381,11 +382,15 @@ function layoutFile() {
   return join(app.getPath('userData'), 'workspace-layout.json')
 }
 
+// The layout survives a kill mid-write: saved through a temp file (the
+// previous copy kept as .bak), and a damaged file falls back to that copy
+// instead of starting over with an empty grid.
 ipcMain.handle('layout:load', () => {
   try {
-    const p = layoutFile()
-    if (!fs.existsSync(p)) return null
-    return JSON.parse(fs.readFileSync(p, 'utf8'))
+    const res = readJsonSafe(layoutFile())
+    if (res.corrupt) logCrashContext(`layout:load: damaged layout kept as ${res.corrupt}`)
+    if (res.from === 'backup') log.warn('app', 'layout: restored from the previous copy (the file was damaged)')
+    return res.data
   } catch (err) {
     logCrashContext(`layout:load failed: ${err.message}`)
     return null
@@ -394,7 +399,7 @@ ipcMain.handle('layout:load', () => {
 
 ipcMain.on('layout:save', (_evt, data) => {
   try {
-    fs.writeFileSync(layoutFile(), JSON.stringify(data, null, 2), 'utf8')
+    writeJsonSafe(layoutFile(), data)
   } catch {
     /* best-effort: a failed save just means last layout is reused next launch */
   }

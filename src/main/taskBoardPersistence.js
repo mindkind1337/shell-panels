@@ -1,3 +1,4 @@
+import { writeJsonSafe } from './safeJson'
 import { join } from 'path'
 import fs from 'fs'
 
@@ -32,16 +33,44 @@ export function taskBoardFilePath(userDataDir) {
  */
 export function loadTasks(userDataDir) {
   const file = taskBoardFilePath(userDataDir)
-  if (!fs.existsSync(file)) return []
+  if (!fs.existsSync(file)) return backupTasks(file) || []
 
   const raw = fs.readFileSync(file, 'utf8')
-  if (!raw.trim()) return []
+  // Empty or damaged (the app was stopped mid-write by an older version):
+  // the previous good copy, if any.
+  if (!raw.trim()) return backupTasks(file) || []
 
-  const parsed = JSON.parse(raw)
+  let parsed
+  try {
+    parsed = JSON.parse(raw)
+  } catch (err) {
+    const bak = backupTasks(file)
+    if (bak) {
+      try {
+        fs.copyFileSync(file, `${file}.corrupt-${Date.now()}`)
+      } catch {
+        // keeping the damaged copy is best effort
+      }
+      return bak
+    }
+    throw err
+  }
   if (Array.isArray(parsed)) return parsed
   // Forward-compatible: also accept a { version, tasks: [...] } envelope.
   if (parsed && Array.isArray(parsed.tasks)) return parsed.tasks
   return []
+}
+
+// The previous good copy (<file>.bak), or null.
+function backupTasks(file) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(`${file}.bak`, 'utf8'))
+    if (Array.isArray(parsed)) return parsed
+    if (parsed && Array.isArray(parsed.tasks)) return parsed.tasks
+  } catch {
+    // no usable backup
+  }
+  return null
 }
 
 /**
@@ -55,6 +84,8 @@ export function loadTasks(userDataDir) {
 export function saveTasks(userDataDir, tasks) {
   if (!Array.isArray(tasks)) throw new Error('saveTasks requires an array of tasks')
   const file = taskBoardFilePath(userDataDir)
-  fs.writeFileSync(file, JSON.stringify(tasks, null, 2), 'utf8')
+  // Temp file + rename, previous copy kept as .bak: a kill mid-write never
+  // leaves an empty or cut board.
+  writeJsonSafe(file, tasks)
   return file
 }
