@@ -83,7 +83,7 @@ async function main() {
     await page.click('button[aria-label="Settings"]')
     await page.select('#appearance-theme', 'classic')
     await page.waitForFunction(() => document.documentElement.dataset.theme === 'classic')
-    assert.equal(await page.$('.ws-sessions'), null)
+    await page.waitForSelector('.ws-sessions')
     assert.equal(await page.$('.statusbar'), null)
     assert.equal(
       await page.$eval('.pane', (n) => getComputedStyle(n).backgroundColor),
