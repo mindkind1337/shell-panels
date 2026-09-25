@@ -15,6 +15,11 @@ export function recordActivity(event) {
   scheduleSave()
 }
 
+// An event already in the log was changed in place: save it.
+export function activityChanged() {
+  scheduleSave()
+}
+
 // Events recorded before the saved log finished loading are kept after it.
 export async function loadActivity() {
   try {

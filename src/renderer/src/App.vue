@@ -24,7 +24,7 @@ import {
   clearAttention
 } from './agentStatus'
 import { detectApproval } from './agentLimit'
-import { activity, recordActivity, loadActivity, saveActivityNow } from './activityStore'
+import { activity, recordActivity, loadActivity, saveActivityNow, activityChanged } from './activityStore'
 import ActivityPanel from './components/ActivityPanel.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import NotesPanel from './components/NotesPanel.vue'
@@ -1973,22 +1973,43 @@ const agentStates = computed(() => {
 const trackedState = reactive({}) // leafId -> { state, since, sinceStart }
 const appStartedAt = Date.now()
 
-// After a restart or reload: a pane still in the state the saved log last
-// recorded for it takes that start time back (an approval waiting 9 min
-// before the reload still shows 9 min). Otherwise the time stays marked as
-// a minimum ("+").
-function hydrateTracking() {
-  for (const [id, t] of Object.entries(trackedState)) {
-    if (!t.sinceStart) continue
-    let last = null
-    for (const e of activity) {
-      if (e.type === 'agent.state' && e.paneId === id && e.t < appStartedAt && (!last || e.t > last.t)) last = e
-    }
-    if (last && last.state === t.state) {
-      t.since = last.t
-      t.sinceStart = false
+// After a restart or reload, a pane found in the state the saved log last
+// recorded for it takes that state's real start back (an approval waiting
+// 9 min before the reload still shows 9 min), also when the state is only
+// detected a little after startup (an approval prompt shows once its
+// terminal redraws). Each logged state keeps its real start in its event
+// (`since`), so this holds across any number of reloads. When it cannot be
+// restored, a time that began before startup shows as a minimum ("+").
+const RESTORE_WINDOW_MS = 60000
+let activityLoaded = false
+const lastStateEvent = {} // leafId -> the logged event of its current state
+
+function savedStateBefore(id) {
+  let last = null
+  for (const e of activity) {
+    if (e.type === 'agent.state' && e.paneId === id && e.t < appStartedAt && (!last || e.t > last.t)) last = e
+  }
+  return last
+}
+
+function restoreSince(id) {
+  const t = trackedState[id]
+  if (!t || !activityLoaded || t.restoreTried === t.state) return
+  t.restoreTried = t.state
+  const prev = savedStateBefore(id)
+  if (prev && prev.state === t.state) {
+    t.since = prev.since || prev.t
+    t.sinceStart = false
+    if (lastStateEvent[id]) {
+      lastStateEvent[id].since = t.since
+      activityChanged()
     }
   }
+}
+
+function hydrateTracking() {
+  activityLoaded = true
+  for (const id of Object.keys(trackedState)) restoreSince(id)
 }
 const clock = ref(Date.now())
 let lastTick = Date.now()
@@ -1996,7 +2017,11 @@ const clockTimer = setInterval(() => {
   const now = Date.now()
   const slept = now - lastTick - 20000
   if (slept > 60000) {
-    for (const t of Object.values(trackedState)) t.since += slept
+    for (const [id, t] of Object.entries(trackedState)) {
+      t.since += slept
+      if (lastStateEvent[id]) lastStateEvent[id].since = t.since
+    }
+    activityChanged()
     // The time on a task does not grow while asleep either.
     for (const t of boardTasks) if (t.column === 'doing' && t.doingSince) t.doingSince += slept
   }
@@ -2048,8 +2073,11 @@ function logState(id, info, state) {
   loggedState[id] = state
   // The tracking clock follows logged states only, so a short burst (a
   // pasted message echoing, a redraw) does not restart it.
-  if (state === 'closed') delete trackedState[id]
-  else trackedState[id] = { state, since: Date.now(), sinceStart: !trackedState[id] && Date.now() - appStartedAt < 15000 }
+  const early = Date.now() - appStartedAt < RESTORE_WINDOW_MS
+  if (state === 'closed') {
+    delete trackedState[id]
+    delete lastStateEvent[id]
+  } else trackedState[id] = { state, since: Date.now(), sinceStart: early }
   recordActivity({
     type: 'agent.state',
     paneId: id,
@@ -2057,8 +2085,13 @@ function logState(id, info, state) {
     state,
     reset: info && state === 'limited' ? info.reset : undefined,
     wsId: info ? info.wsId : null,
-    teamId: info ? info.teamId : null
+    teamId: info ? info.teamId : null,
+    since: state === 'closed' ? undefined : trackedState[id].since
   })
+  if (state !== 'closed') {
+    lastStateEvent[id] = activity[activity.length - 1]
+    if (early) restoreSince(id)
+  }
 }
 watch(
   agentStates,
