@@ -804,7 +804,7 @@ onMounted(() => {
     if (pid && props.node.pid && pid !== props.node.pid) return
     // No pid (a terminal host started by an older Tessel): a pane restarted
     // in place asks the host whether its own terminal still runs.
-    if (!pid && props.node.gen) {
+    if (!pid && (props.node.gen || props.node.restartedAt)) {
       const gen = props.node.gen
       const a = await window.shellApi.attachPty(id).catch(() => null)
       if (!mounted || props.node.gen !== gen || !term) return
