@@ -3371,13 +3371,13 @@ async function restartInPlace(leafId) {
 }
 
 // Safe wake-up: an idle agent does not read its team messages by itself (it
-// reads them when it works). When messages have waited a minute, Tessel types
+// reads them when it works). When messages have waited 10 s, Tessel types
 // ONE short reminder line into its terminal, only when the agent is quiet
 // (no approval, no usage limit, nothing else being typed there) and the user
 // is not in that pane nor typed there in the last 30 s. The messages
 // themselves stay in the background. One reminder per batch: a new one only
 // after the agent has read everything.
-const WAKE_AFTER_MS = 60000
+const WAKE_AFTER_MS = 10000 // an idle agent does not read by itself: remind it soon
 const USER_AWAY_MS = 30000
 const wakeState = {} // leafId -> { since, woken }
 // The user is not in this pane, has no line in progress there, and has not
