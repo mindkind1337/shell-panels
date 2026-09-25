@@ -125,6 +125,11 @@ function paneLabel(pane) {
       >
     </div>
 
+    <div v-if="assignedPane && assignedPane.track && task.column === 'doing'" class="task-track" :class="'track-' + assignedPane.track.level">
+      <span>{{ assignedPane.track.text }}<template v-if="assignedPane.track.onTask"> · on this task {{ assignedPane.track.onTask }}</template></span>
+      <span v-if="assignedPane.track.reason" class="task-track-reason">{{ assignedPane.track.reason }}</span>
+    </div>
+
     <div v-if="task.worktree || task.brief" class="task-card-extra">
       <span v-if="task.worktree" class="task-branch" :title="task.worktree.path">{{ task.worktree.branch }}</span>
       <span v-if="task.brief" class="task-brief" :title="task.brief">{{ task.brief }}</span>

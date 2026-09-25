@@ -5174,3 +5174,64 @@ button.act-stat:hover,
   border-color: color-mix(in srgb, var(--ok, #4caf7a) 60%, transparent);
   color: var(--text-strong);
 }
+
+/* Agent tracking: state + duration, the task under it, and a quiet level
+   colour when an agent may need a look (reason in the tooltip). */
+.ws-session-task {
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 10.5px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  opacity: 0.85;
+}
+
+.ws-session-task.none {
+  font-style: italic;
+  opacity: 0.6;
+}
+
+.ws-session-state.track-warn {
+  color: var(--warn);
+}
+
+.ws-session-state.track-alert {
+  color: var(--danger);
+}
+
+.task-track {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.task-track-reason {
+  color: var(--text);
+}
+
+.task-track.track-warn .task-track-reason {
+  color: var(--warn);
+}
+
+.task-track.track-alert .task-track-reason {
+  color: var(--danger);
+}
+
+.pane-stuck {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  color: var(--warn);
+  font-size: 10.5px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.pane-stuck.alert {
+  background: color-mix(in srgb, var(--danger) 20%, transparent);
+  color: var(--danger);
+}

@@ -131,6 +131,8 @@ const limit = computed(() => limits[props.node.id] || null)
 const asksApproval = computed(() => !!approvals[props.node.id])
 // The task this agent is doing (or waiting to have reviewed), if any.
 const task = computed(() => (ctx.taskOfPane ? ctx.taskOfPane(props.node.id) : null))
+// How it is doing (src/shared/tracking.js), when it may be stuck.
+const track = computed(() => (ctx.trackOf ? ctx.trackOf(props.node.id) : null))
 
 // The team this pane is in (a named, coloured group of agents), if any.
 // (Checked: in the dev build this file can reload before App.vue provides it.)
@@ -981,6 +983,13 @@ onBeforeUnmount(() => {
           class="pane-team"
           :title="`Team: ${team.name}${isLead ? ' (this agent leads it)' : ''} (manage it under Sessions)`"
           >{{ team.name }}{{ isLead ? ' · lead' : '' }}</span
+        >
+        <span
+          v-if="isAgent && track && (track.level === 'warn' || track.level === 'alert') && !asksApproval && !limit"
+          class="pane-stuck"
+          :class="track.level"
+          :title="track.reason"
+          >quiet {{ track.minutes }} min</span
         >
         <span
           v-if="isAgent && asksApproval"

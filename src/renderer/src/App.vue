@@ -31,6 +31,7 @@ import NotesPanel from './components/NotesPanel.vue'
 import NewTaskDialog from './components/NewTaskDialog.vue'
 import ReviewPanel from './components/ReviewPanel.vue'
 import { parseLeadRequest, findTaskRef, leadGuide, memberGuide } from '../../shared/leadRequests'
+import { trackAgent } from '../../shared/tracking'
 import { dropBuffer, seedBuffer } from './ptyStore'
 import { tasks as boardTasks, setTasks, updateTask, removeTask, addTask } from './taskBoardStore'
 
@@ -743,7 +744,8 @@ const agentPanes = computed(() => {
         num: leaf.num || null,
         title: leaf.title,
         agentId: leaf.agentId,
-        accent: leaf.accent
+        accent: leaf.accent,
+        track: trackOf(leaf.id)
       })
     }
   })
@@ -889,6 +891,7 @@ provide('panelCtx', {
   setTeamLead,
   teamLead,
   taskOfPane,
+  trackOf,
   agentReportedDone,
   copied: (what) => showToast(`${what} copied.`, { timeout: 2000 })
 })
@@ -1963,6 +1966,51 @@ const agentStates = computed(() => {
   return out
 })
 
+// --- Agent tracking -----------------------------------------------------------
+// For each agent: its state and since when (trackedState), its task, and
+// whether it looks stuck (src/shared/tracking.js). A clock ticks every 20 s;
+// time the computer slept is not counted as observed time.
+const trackedState = reactive({}) // leafId -> { state, since }
+const clock = ref(Date.now())
+let lastTick = Date.now()
+const clockTimer = setInterval(() => {
+  const now = Date.now()
+  const slept = now - lastTick - 20000
+  if (slept > 60000) for (const t of Object.values(trackedState)) t.since += slept
+  lastTick = now
+  clock.value = now
+}, 20000)
+onBeforeUnmount(() => clearInterval(clockTimer))
+
+function trackOf(leafId) {
+  const t = trackedState[leafId]
+  if (!t) return null
+  const info = agentStates.value[leafId]
+  return trackAgent({ state: t.state, since: t.since, reset: info ? info.reset : '' }, taskOfPane(leafId), clock.value)
+}
+
+// One notice per episode when an agent needs you (level 'alert'); a new
+// episode starts once it has recovered.
+const alertedAgents = new Set()
+const agentAlerts = computed(() => {
+  const out = []
+  forEachWsLeaf((leaf) => {
+    if (leaf.kind !== 'agent') return
+    const t = trackOf(leaf.id)
+    if (t && t.level === 'alert') out.push({ id: leaf.id, title: paneLabel(leaf), reason: t.reason })
+  })
+  return out
+})
+watch(agentAlerts, (list) => {
+  const now = new Set(list.map((a) => a.id))
+  for (const id of [...alertedAgents]) if (!now.has(id)) alertedAgents.delete(id)
+  for (const a of list) {
+    if (alertedAgents.has(a.id)) continue
+    alertedAgents.add(a.id)
+    showToast(`${a.title}: ${a.reason}`, { kind: 'attention', timeout: 12000, action: { label: 'Show', run: () => focusPane(a.id) } })
+  }
+})
+
 // Log state changes. A burst of work shorter than 3 s (typing echoes, a
 // redraw) is not logged, so the log shows real stretches of work.
 const loggedState = {}
@@ -1970,6 +2018,10 @@ const workingTimers = {}
 function logState(id, info, state) {
   if (loggedState[id] === state) return
   loggedState[id] = state
+  // The tracking clock follows logged states only, so a short burst (a
+  // pasted message echoing, a redraw) does not restart it.
+  if (state === 'closed') delete trackedState[id]
+  else trackedState[id] = { state, since: Date.now() }
   recordActivity({
     type: 'agent.state',
     paneId: id,
@@ -2260,6 +2312,7 @@ async function startTask(spec, opts = {}) {
     column: 'doing',
     reviewerId: spec.reviewerId || null,
     startedAt: Date.now(),
+    doingSince: Date.now(),
     teamId: opts.teamId || null
   })
 
@@ -2434,7 +2487,8 @@ function sendBackToAgent(task, text, action, detail, by = null) {
       'When it is done and checked, end your last message with a line that contains only the words TASK and COMPLETE joined by an underscore.',
     by ? { source: 'lead', scope: 'task', from: by } : { source: 'you', scope: 'task' }
   )
-  updateTask(task.id, { column: 'doing', leadReview: null })
+  // Back in Doing: a new period starts.
+  updateTask(task.id, { column: 'doing', leadReview: null, doingSince: Date.now() })
   taskEvent(task, action, detail, by)
   reviewTaskId.value = null
   showToast(`Sent to ${leaf.title}. "${task.title}" is back in Doing.`, { timeout: 5000 })
@@ -3448,6 +3502,7 @@ const sessionItems = computed(() => {
       task: taskOfPane(leaf.id)?.title || null,
       review: taskOfPane(leaf.id)?.column === 'review',
       leadReview: taskOfPane(leaf.id)?.leadReview || null,
+      track: leaf.kind === 'agent' ? trackOf(leaf.id) : null,
       active: leaf.id === activeId.value
     })
   })
