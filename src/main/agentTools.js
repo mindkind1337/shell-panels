@@ -174,7 +174,11 @@ function runAgentCli(exe, args, cwd) {
   const script = [
     '$ErrorActionPreference = "Continue"',
     "$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')",
-    `& ${psQuote(exe)} ${args.map(psQuote).join(' ')}`,
+    // Where scripts are blocked (Restricted, the Windows default, or
+    // AllSigned) an npm .ps1 shim cannot run: use its .cmd/.exe instead. Only
+    // then, since cmd.exe re-reads arguments (a & in a URL would cut it).
+    "$cli = $null; if (@('Restricted', 'AllSigned') -contains [string](Get-ExecutionPolicy)) { $cli = Get-Command -CommandType Application -Name " + psQuote(exe) + " -ErrorAction SilentlyContinue | Select-Object -First 1 }",
+    `if ($cli) { & $cli.Source ${args.map(psQuote).join(' ')} } else { & ${psQuote(exe)} ${args.map(psQuote).join(' ')} }`,
     'exit $LASTEXITCODE'
   ].join('; ')
   const encoded = Buffer.from(script, 'utf16le').toString('base64')

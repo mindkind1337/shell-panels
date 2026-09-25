@@ -749,7 +749,9 @@ function validateCodexConfig(text) {
   const script = [
     "$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')",
     `$env:CODEX_HOME = '${home.replace(/'/g, "''")}'`,
-    'codex mcp list --json | Out-Null',
+    // codex.cmd, not the npm codex.ps1 shim (it cannot run where scripts are
+    // blocked); the arguments are plain words, safe through cmd.exe.
+    '& (Get-Command -CommandType Application -Name codex | Select-Object -First 1).Source mcp list --json | Out-Null',
     'exit $LASTEXITCODE'
   ].join('; ')
   return new Promise((resolveCheck) => {
