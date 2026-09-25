@@ -424,6 +424,13 @@ onMounted(async () => {
             <span class="launch-tag muted">{{ row.type === 'stdio' ? 'command' : row.type }}</span>
           </div>
 
+          <p v-if="row.name === 'tessel-team'" class="mcp-about">
+            <strong>Added by Tessel: team messages.</strong> Agents in the same team use it to talk to
+            each other in the background, so nothing is ever typed into your terminals. It does nothing
+            for an agent that is not in a team. Claude Code also gets its new messages automatically
+            (hooks in ~/.claude/settings.json). An agent that was already open uses it after a restart.
+          </p>
+
           <div class="mcp-agents">
             <div v-for="agent in AGENTS" :key="agent" class="mcp-agent">
               <BrandIcon :kind="agent" :size="14" />

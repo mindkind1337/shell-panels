@@ -23,6 +23,9 @@ import {
   hklFromTip
 } from './agentTools'
 import { reviewInfo, reviewDiff, reviewMerge, reviewRemove } from './review'
+import { takeTeamAcks } from './teamAcks'
+import { writeServerScript, installClaudeHooks, installCodexServer, claudeServerPresent, SERVER_NAME } from './teamInstall'
+import teamServerSource from './teamMcp/server.cjs?raw'
 import { ensureInbox, takeInbox, removeInbox } from './leadInbox'
 import {
   ensureTeamChannel,
@@ -722,6 +725,43 @@ ipcMain.handle('channel:poll', safe(pollTeamChannel))
 ipcMain.handle('channel:ack', safe(ackTeamDelivery))
 ipcMain.handle('channel:hold', safe(holdTeamDelivery))
 ipcMain.handle('channel:release', safe(releaseTeamDelivery))
+ipcMain.handle('channel:acks', safe(takeTeamAcks))
+
+// Team tools for agents (background messages, never typed into terminals):
+// the MCP server script, registered for Claude Code and Codex, plus Claude
+// Code hooks. -> { ok, changed: [...], errors: [...] }
+ipcMain.handle(
+  'team:install',
+  safe(async () => {
+    const script = writeServerScript(app.getPath('userData'), teamServerSource)
+    const changed = []
+    const errors = []
+    if (!claudeServerPresent(script)) {
+      const res = await addMcp({
+        agent: 'claude',
+        name: SERVER_NAME,
+        transport: 'stdio',
+        commandLine: `node "${script}"`,
+        scope: 'user'
+      })
+      if (res.ok) changed.push('Claude Code: MCP server tessel-team')
+      else errors.push(`Claude Code: ${res.error}`)
+    }
+    try {
+      if (installClaudeHooks(script)) changed.push('Claude Code: hooks for team messages')
+    } catch (err) {
+      errors.push(`Claude Code hooks: ${err.message}`)
+    }
+    try {
+      if (installCodexServer(script)) changed.push('Codex: MCP server tessel-team')
+    } catch (err) {
+      errors.push(`Codex: ${err.message}`)
+    }
+    if (changed.length) log.info('team', `team tools set up: ${changed.join('; ')}`)
+    if (errors.length) log.error('team', `team tools: ${errors.join('; ')}`)
+    return { ok: true, script, changed, errors }
+  })
+)
 ipcMain.handle(
   'mcp:list',
   safe((cwd) => listMcp(cwd))
@@ -957,7 +997,7 @@ const host = createPtyClient({
 })
 
 ipcMain.handle('pty:create', async (_evt, opts = {}) => {
-  const { id, shellId, cols = 80, rows = 24, cwd } = opts
+  const { id, shellId, cols = 80, rows = 24, cwd, projectDir } = opts
   if (!id) throw new Error('pty:create requires an id')
   const shell = getShells().find((s) => s.id === shellId) || defaultShell()
   const startDir = cwd && fs.existsSync(cwd) ? cwd : os.homedir()
@@ -970,7 +1010,13 @@ ipcMain.handle('pty:create', async (_evt, opts = {}) => {
       file: shell.file,
       args: shell.args,
       cwd: startDir,
-      env: freshEnv(),
+      env: {
+        ...freshEnv(),
+        // For the Tessel team tools (teamMcp/server.cjs): which pane this is,
+        // and the project its team lives in.
+        TESSEL_PANE_ID: String(id),
+        ...(projectDir && isAbsolute(projectDir) && fs.existsSync(projectDir) ? { TESSEL_PROJECT_DIR: projectDir } : {})
+      },
       cols,
       rows,
       useConpty,

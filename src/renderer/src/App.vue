@@ -312,6 +312,7 @@ function watchCodexSession(leaf) {
 }
 
 async function createLeaf(shellId, agent = null, cwd = null, worktree = null, opts = {}) {
+  const projectDir = cwd
   if (worktree && worktree.path) cwd = worktree.path
   const id = opts.id || newId('pane')
   let res = null
@@ -333,7 +334,7 @@ async function createLeaf(shellId, agent = null, cwd = null, worktree = null, op
   }
   if (!attached) {
     try {
-      res = await window.shellApi.createPty({ id, shellId, cols: 80, rows: 24, cwd })
+      res = await window.shellApi.createPty({ id, shellId, cols: 80, rows: 24, cwd, projectDir })
     } catch (err) {
       res = { ok: false, error: err && err.message }
     }
@@ -3139,6 +3140,7 @@ async function syncChannel(team, opts = {}) {
     if (limits[m.id]) continue
     team.channelTold[m.id] = box.outbox
     if (opts.quiet && opts.quiet.includes(m.id)) continue
+    if (!TEAM_MESSAGES_IN_TERMINALS) continue
     tellAgents([m], `[Tessel] Team "${team.name}": talk to your teammates directly through the team channel, not through the user.\n${box.guide}`, team.id)
   }
   for (const id of Object.keys(team.channelTold)) if (!boxes[id]) delete team.channelTold[id]
@@ -3159,15 +3161,39 @@ async function ackChannel(dir, teamId, d, key, tries = 0) {
   else channelQueued.delete(key)
 }
 
+// The team tools are set up for Claude Code and Codex once a team exists
+// (MCP server "tessel-team" + Claude Code hooks; listed in the MCP dialog).
+let teamToolsAsked = false
+async function installTeamToolsOnce() {
+  if (teamToolsAsked || !window.shellApi.installTeamTools) return
+  teamToolsAsked = true
+  const res = await window.shellApi.installTeamTools().catch(() => null)
+  if (res && res.ok && res.changed && res.changed.length) {
+    showToast(
+      'Team messages now go in the background, never into your terminals. Restart the agents of a team once so they can use it (see MCP servers: tessel-team).',
+      { timeout: 12000 }
+    )
+  } else if (res && res.errors && res.errors.length) {
+    showToast(`Team messages could not be fully set up: ${res.errors[0]}`, { kind: 'error', timeout: 10000 })
+  }
+}
+
 // Team messages are NOT typed into terminals any more: the user works in those
 // same terminals, and typing there interfered with them. Messages stay on
 // disk (pending) until they reach agents another way.
 const TEAM_MESSAGES_IN_TERMINALS = false
 
 async function deliverChannel(team, members) {
-  if (!TEAM_MESSAGES_IN_TERMINALS) return
   const dir = channelDir(team)
   if (!dir || !window.shellApi.channel || !channelBoxes[team.id]) return
+  if (!TEAM_MESSAGES_IN_TERMINALS) {
+    // Agents read and send with the team tools (src/main/teamMcp/server.cjs):
+    // Tessel only takes their outboxes in and turns read notes into receipts.
+    await window.shellApi.channel.poll({ dir, teamId: team.id, availableIds: [] })
+    if (window.shellApi.channel.acks) await window.shellApi.channel.acks({ dir, teamId: team.id })
+    installTeamToolsOnce()
+    return
+  }
   const res = await window.shellApi.channel.poll({ dir, teamId: team.id, availableIds: members.map((m) => m.id) })
   if (!res || !res.ok) return
   const who = Object.fromEntries((res.participants || []).map((p) => [p.id, p]))

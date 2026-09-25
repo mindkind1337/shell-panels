@@ -57,8 +57,11 @@ const api = {
     poll: (args) => ipcRenderer.invoke('channel:poll', args),
     ack: (args) => ipcRenderer.invoke('channel:ack', args),
     hold: (args) => ipcRenderer.invoke('channel:hold', args),
-    release: (args) => ipcRenderer.invoke('channel:release', args)
+    release: (args) => ipcRenderer.invoke('channel:release', args),
+    acks: (args) => ipcRenderer.invoke('channel:acks', args)
   },
+  // Set up the team tools (MCP server + Claude hooks) for agent CLIs.
+  installTeamTools: () => ipcRenderer.invoke('team:install'),
   review: {
     info: (args) => ipcRenderer.invoke('review:info', args),
     diff: (args) => ipcRenderer.invoke('review:diff', args),
