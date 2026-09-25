@@ -135,4 +135,41 @@ describe('surviving a kill mid-write', () => {
     expect(fsm.readdirSync(d).some((n) => n.startsWith('task-board.json.corrupt-'))).toBe(true)
     fsm.rmSync(d, { recursive: true, force: true })
   })
+
+  it('an empty file or an unknown shape also uses the copy and is kept aside', () => {
+    const d = fs.mkdtempSync(join(os.tmpdir(), 'tessel-tb-'))
+    const file = join(d, 'task-board.json')
+    saveTasks(d, [{ id: 'a' }])
+    saveTasks(d, [{ id: 'b' }])
+    fs.writeFileSync(file, '')
+    expect(loadTasks(d)).toEqual([{ id: 'a' }])
+    expect(fs.readdirSync(d).some((n) => n.startsWith('task-board.json.corrupt-'))).toBe(true)
+    fs.writeFileSync(file, '{"version":2,"items":[]}')
+    expect(loadTasks(d)).toEqual([{ id: 'a' }])
+    fs.rmSync(d, { recursive: true, force: true })
+  })
+
+  it('a damaged file never replaces the good copy, even when the next save fails', () => {
+    const d = fs.mkdtempSync(join(os.tmpdir(), 'tessel-tb-'))
+    const file = join(d, 'task-board.json')
+    saveTasks(d, [{ id: 'a' }])
+    saveTasks(d, [{ id: 'a' }, { id: 'b' }])
+    fs.writeFileSync(file, '[{"id":')
+    const restored = loadTasks(d)
+    expect(restored).toEqual([{ id: 'a' }])
+    const rename = fs.renameSync
+    // The primary rename fails (killed right there).
+    fs.renameSync = (from, to) => {
+      if (to === file) throw new Error('killed')
+      return rename(from, to)
+    }
+    try {
+      expect(() => saveTasks(d, restored)).toThrow('killed')
+    } finally {
+      fs.renameSync = rename
+    }
+    expect(loadTasks(d)).toEqual([{ id: 'a' }])
+    expect(fs.readdirSync(d).filter((n) => n.endsWith('.tmp'))).toEqual([])
+    fs.rmSync(d, { recursive: true, force: true })
+  })
 })

@@ -3,42 +3,67 @@
 // over the real one, keeping the previous good copy as <file>.bak. Reading
 // falls back to that copy when the file is damaged, and keeps the damaged
 // file aside (<file>.corrupt-<time>) instead of letting it be overwritten.
+//
+// `valid(data)` (optional) says whether parsed content has the expected
+// shape; content that parses but fails it counts as damaged.
 import fs from 'fs'
 
-export function writeJsonSafe(file, data) {
-  const text = JSON.stringify(data, null, 2)
+const anyShape = () => true
+
+// The parsed content of `file` when it is good, else undefined.
+function readGood(file, valid) {
+  try {
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'))
+    return valid(data) ? data : undefined
+  } catch {
+    return undefined
+  }
+}
+
+// Write `text` to `file` through a temp file + rename.
+function writeAtomic(file, text) {
   const tmp = `${file}.${process.pid}.tmp`
   fs.writeFileSync(tmp, text, 'utf8')
   try {
-    if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.bak`)
-  } catch {
-    // no backup this time; the new file is still written safely
+    fs.renameSync(tmp, file)
+  } catch (err) {
+    try {
+      fs.unlinkSync(tmp)
+    } catch {
+      // nothing left to clean
+    }
+    throw err
   }
-  fs.renameSync(tmp, file)
+}
+
+export function writeJsonSafe(file, data, valid = anyShape) {
+  const text = JSON.stringify(data, null, 2)
+  // Only a good file becomes the backup (a damaged one would replace the
+  // last good copy), and the backup itself is replaced atomically.
+  try {
+    if (fs.existsSync(file) && readGood(file, valid) !== undefined) {
+      writeAtomic(`${file}.bak`, fs.readFileSync(file, 'utf8'))
+    }
+  } catch {
+    // no new backup this time; the previous one is still intact
+  }
+  writeAtomic(file, text)
 }
 
 // -> { data, from: 'file' | 'backup' | null, corrupt: path | null }
-export function readJsonSafe(file) {
+export function readJsonSafe(file, valid = anyShape) {
   let corrupt = null
   if (fs.existsSync(file)) {
+    const data = readGood(file, valid)
+    if (data !== undefined) return { data, from: 'file', corrupt }
+    corrupt = `${file}.corrupt-${Date.now()}`
     try {
-      return { data: JSON.parse(fs.readFileSync(file, 'utf8')), from: 'file', corrupt }
+      fs.copyFileSync(file, corrupt)
     } catch {
-      corrupt = `${file}.corrupt-${Date.now()}`
-      try {
-        fs.copyFileSync(file, corrupt)
-      } catch {
-        corrupt = null
-      }
+      corrupt = null
     }
   }
-  const bak = `${file}.bak`
-  if (fs.existsSync(bak)) {
-    try {
-      return { data: JSON.parse(fs.readFileSync(bak, 'utf8')), from: 'backup', corrupt }
-    } catch {
-      // the backup is damaged too
-    }
-  }
+  const bak = readGood(`${file}.bak`, valid)
+  if (bak !== undefined) return { data: bak, from: 'backup', corrupt }
   return { data: null, from: null, corrupt }
 }

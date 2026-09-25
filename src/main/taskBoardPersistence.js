@@ -1,4 +1,4 @@
-import { writeJsonSafe } from './safeJson'
+import { writeJsonSafe, readJsonSafe } from './safeJson'
 import { join } from 'path'
 import fs from 'fs'
 
@@ -33,44 +33,23 @@ export function taskBoardFilePath(userDataDir) {
  */
 export function loadTasks(userDataDir) {
   const file = taskBoardFilePath(userDataDir)
-  if (!fs.existsSync(file)) return backupTasks(file) || []
+  if (!fs.existsSync(file) && !fs.existsSync(`${file}.bak`)) return []
 
-  const raw = fs.readFileSync(file, 'utf8')
-  // Empty or damaged (the app was stopped mid-write by an older version):
-  // the previous good copy, if any.
-  if (!raw.trim()) return backupTasks(file) || []
+  // A damaged file (stopped mid-write by an older version, cut, unknown
+  // shape) is kept aside as .corrupt-<time> and the previous good copy used.
+  const res = readJsonSafe(file, isTaskList)
+  if (res.data) return Array.isArray(res.data) ? res.data : res.data.tasks
 
-  let parsed
-  try {
-    parsed = JSON.parse(raw)
-  } catch (err) {
-    const bak = backupTasks(file)
-    if (bak) {
-      try {
-        fs.copyFileSync(file, `${file}.corrupt-${Date.now()}`)
-      } catch {
-        // keeping the damaged copy is best effort
-      }
-      return bak
-    }
-    throw err
-  }
-  if (Array.isArray(parsed)) return parsed
-  // Forward-compatible: also accept a { version, tasks: [...] } envelope.
-  if (parsed && Array.isArray(parsed.tasks)) return parsed.tasks
+  // No good copy at all: empty or an unknown shape opens an empty board;
+  // damaged JSON throws so the caller logs it.
+  const raw = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''
+  if (raw.trim()) JSON.parse(raw)
   return []
 }
 
-// The previous good copy (<file>.bak), or null.
-function backupTasks(file) {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(`${file}.bak`, 'utf8'))
-    if (Array.isArray(parsed)) return parsed
-    if (parsed && Array.isArray(parsed.tasks)) return parsed.tasks
-  } catch {
-    // no usable backup
-  }
-  return null
+// A task array, or the forward-compatible { version, tasks: [...] } envelope.
+function isTaskList(data) {
+  return Array.isArray(data) || (!!data && Array.isArray(data.tasks))
 }
 
 /**
@@ -86,6 +65,6 @@ export function saveTasks(userDataDir, tasks) {
   const file = taskBoardFilePath(userDataDir)
   // Temp file + rename, previous copy kept as .bak: a kill mid-write never
   // leaves an empty or cut board.
-  writeJsonSafe(file, tasks)
+  writeJsonSafe(file, tasks, isTaskList)
   return file
 }
