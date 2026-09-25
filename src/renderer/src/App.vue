@@ -3550,10 +3550,15 @@ async function deliverChannel(team, members) {
     if (window.shellApi.channel.acks) await window.shellApi.channel.acks({ dir, teamId: team.id })
     const res = await window.shellApi.channel.poll({ dir, teamId: team.id, availableIds: members.map((m) => m.id) })
     if (res && res.ok) {
-      const counts = {}
-      for (const d of [...(res.deliveries || []), ...(res.held || [])]) {
-        if (d.fromId === 'tessel' && /^Delivered to /.test(d.text)) continue
-        counts[d.toId] = (counts[d.toId] || 0) + 1
+      // Complete counts per member from the channel (the delivery list is
+      // capped, so a long backlog for one member would hide another's).
+      let counts = res.unreadCounts
+      if (!counts) {
+        counts = {}
+        for (const d of [...(res.deliveries || []), ...(res.held || [])]) {
+          if (d.fromId === 'tessel' && /^Delivered to /.test(d.text)) continue
+          counts[d.toId] = (counts[d.toId] || 0) + 1
+        }
       }
       for (const m of members) {
         if (counts[m.id]) teamUnread[m.id] = counts[m.id]
