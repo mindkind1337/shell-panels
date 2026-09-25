@@ -406,7 +406,8 @@ describe('the team board through the team tools', () => {
     ])
     // Not saved yet (say Tessel stopped): the same requests come back.
     expect(takeTeamRequests({ dir, teamId }).requests).toEqual(res.requests)
-    finishTeamRequests({ dir, teamId, files: res.requests.map((r) => r.file) })
+    const done = finishTeamRequests({ dir, teamId, files: res.requests.map((r) => r.file) })
+    expect(done.removed.sort()).toEqual(res.requests.map((r) => r.file).sort())
     expect(takeTeamRequests({ dir, teamId }).requests).toEqual([])
   })
 

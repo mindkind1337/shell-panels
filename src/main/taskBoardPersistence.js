@@ -32,19 +32,33 @@ export function taskBoardFilePath(userDataDir) {
  * @returns {Array<object>}
  */
 export function loadTasks(userDataDir) {
+  return loadBoard(userDataDir).tasks
+}
+
+// The board with its ledger: appliedRequests, the agents' board requests
+// (team tools) already applied, kept in the same file so they are saved
+// atomically with the cards (see syncTeamBoard in App.vue).
+// -> { tasks, appliedRequests }
+export function loadBoard(userDataDir) {
   const file = taskBoardFilePath(userDataDir)
-  if (!fs.existsSync(file) && !fs.existsSync(`${file}.bak`)) return []
+  if (!fs.existsSync(file) && !fs.existsSync(`${file}.bak`)) return { tasks: [], appliedRequests: [] }
 
   // A damaged file (stopped mid-write by an older version, cut, unknown
   // shape) is kept aside as .corrupt-<time> and the previous good copy used.
   const res = readJsonSafe(file, isTaskList)
-  if (res.data) return Array.isArray(res.data) ? res.data : res.data.tasks
+  if (res.data) {
+    if (Array.isArray(res.data)) return { tasks: res.data, appliedRequests: [] }
+    const applied = Array.isArray(res.data.appliedRequests)
+      ? res.data.appliedRequests.filter((k) => typeof k === 'string')
+      : []
+    return { tasks: res.data.tasks, appliedRequests: applied }
+  }
 
   // No good copy at all: empty or an unknown shape opens an empty board;
   // damaged JSON throws so the caller logs it.
   const raw = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''
   if (raw.trim()) JSON.parse(raw)
-  return []
+  return { tasks: [], appliedRequests: [] }
 }
 
 // A task array, or the forward-compatible { version, tasks: [...] } envelope.
@@ -60,11 +74,14 @@ function isTaskList(data) {
  * @param {Array<object>} tasks
  * @returns {string} the path written
  */
-export function saveTasks(userDataDir, tasks) {
+export function saveTasks(userDataDir, tasks, appliedRequests = null) {
   if (!Array.isArray(tasks)) throw new Error('saveTasks requires an array of tasks')
   const file = taskBoardFilePath(userDataDir)
   // Temp file + rename, previous copy kept as .bak: a kill mid-write never
-  // leaves an empty or cut board.
-  writeJsonSafe(file, tasks, isTaskList)
+  // leaves an empty or cut board. With a ledger: one file, one write.
+  const data = Array.isArray(appliedRequests)
+    ? { version: 2, tasks, appliedRequests: appliedRequests.filter((k) => typeof k === 'string').slice(-5000) }
+    : tasks
+  writeJsonSafe(file, data, isTaskList)
   return file
 }

@@ -891,11 +891,18 @@ function reconcileTaskPanes() {
 // but targets B2's separate taskboard store. Snapshot to plain objects so the
 // Vue reactive proxy is stripped before the IPC structured clone.
 let taskSaveTimer = null
+// Board requests from agents already applied ("<team>/<file>"), saved in the
+// board's file with the cards (see syncTeamBoard).
+const appliedRequests = new Set()
+function boardToSave() {
+  return { tasks: JSON.parse(JSON.stringify(boardTasks)), appliedRequests: [...appliedRequests] }
+}
+
 function scheduleTaskSave() {
   if (taskSaveTimer) clearTimeout(taskSaveTimer)
   taskSaveTimer = setTimeout(() => {
     taskSaveTimer = null
-    window.shellApi.taskBoard.save(JSON.parse(JSON.stringify(boardTasks)))
+    window.shellApi.taskBoard.save(boardToSave())
   }, 500)
 }
 
@@ -932,7 +939,7 @@ async function installUpdate() {
     clearTimeout(taskSaveTimer)
     taskSaveTimer = null
     try {
-      await window.shellApi.taskBoard.save(JSON.parse(JSON.stringify(boardTasks)))
+      await window.shellApi.taskBoard.save(boardToSave())
     } catch {
       /* best-effort */
     }
@@ -3637,9 +3644,10 @@ async function syncTeamBoard(team, dir, members) {
       applied.push(r.file)
       if (!from) continue // not (or no longer) in this team
       // Already applied (Tessel stopped before its file was removed): never
-      // again, so a later change is not undone.
+      // again, so a later change (or a card deleted since) is not undone.
       const key = `${team.id}/${r.file}`
-      if (boardTasks.some((t) => t.requestKey === key || (t.requestsApplied || []).includes(key))) continue
+      if (appliedRequests.has(key)) continue
+      appliedRequests.add(key)
       if (r.action === 'add') {
         const who = r.assignee ? byNum(r.assignee) : from
         if (!who) {
@@ -3647,7 +3655,7 @@ async function syncTeamBoard(team, dir, members) {
           continue
         }
         const task = addTask({ title: r.title, wsId })
-        updateTask(task.id, { paneId: who.id, column: r.column, createdBy: from.id, requestKey: key })
+        updateTask(task.id, { paneId: who.id, column: r.column, createdBy: from.id })
         recordActivity({ type: 'task', action: 'added', paneId: who.id, agent: agentInfo(who), title: r.title, wsId, by: paneLabel(from) })
       } else if (r.action === 'move') {
         const task = boardTasks.find((t) => t.id === r.id)
@@ -3655,14 +3663,8 @@ async function syncTeamBoard(team, dir, members) {
           refusals.push({ fromId: from.id, text: `No card ${r.id} on your team's board (see team_tasks).` })
           continue
         }
-        // Recorded on the card, saved with it (the last few are enough: a
-        // request file is removed right after the save).
-        const done = [...(task.requestsApplied || []), key].slice(-20)
-        if (task.column === r.column) {
-          updateTask(task.id, { requestsApplied: done })
-          continue
-        }
-        updateTask(task.id, { column: r.column, requestsApplied: done })
+        if (task.column === r.column) continue
+        updateTask(task.id, { column: r.column })
         const owner = task.paneId ? findLeaf(task.paneId) : null
         recordActivity({
           type: 'task',
@@ -3677,11 +3679,16 @@ async function syncTeamBoard(team, dir, members) {
       }
     }
   }
-  // The board is saved before the requests are removed: a reload in between
-  // applies them again, and a card already made is recognised (requestKey).
+  // The board and the ledger of applied requests are saved together, then
+  // the request files removed; a request is dropped from the ledger only once
+  // its file is surely gone (it can never come back then).
   if (applied.length) {
-    const saved = await window.shellApi.taskBoard.save(JSON.parse(JSON.stringify(boardTasks))).catch(() => null)
-    if (saved && saved.ok) await window.shellApi.team.requestsDone({ dir, teamId: team.id, files: applied })
+    const saved = await window.shellApi.taskBoard.save(boardToSave()).catch(() => null)
+    if (saved && saved.ok) {
+      const done = await window.shellApi.team.requestsDone({ dir, teamId: team.id, files: applied }).catch(() => null)
+      for (const f of (done && done.removed) || []) appliedRequests.delete(`${team.id}/${f}`)
+      scheduleTaskSave()
+    }
   }
   for (const r of refusals) {
     const leaf = findLeaf(r.fromId)
@@ -4590,8 +4597,10 @@ onMounted(async () => {
   // any change. The watch is registered AFTER hydration so loading the saved
   // tasks doesn't immediately trigger a redundant save.
   try {
-    const savedTasks = await window.shellApi.taskBoard.load()
+    const saved = await window.shellApi.taskBoard.load({ withLedger: true })
+    const savedTasks = Array.isArray(saved) ? saved : saved && saved.tasks
     if (Array.isArray(savedTasks)) setTasks(savedTasks)
+    for (const k of (saved && saved.appliedRequests) || []) appliedRequests.add(k)
   } catch {
     /* start with an empty board if persisted tasks can't be read */
   }

@@ -173,3 +173,20 @@ describe('surviving a kill mid-write', () => {
     fs.rmSync(d, { recursive: true, force: true })
   })
 })
+
+describe('the ledger of applied board requests', () => {
+  it('is saved in the same file as the cards and read back with them', async () => {
+    const { loadBoard } = await import('../taskBoardPersistence')
+    const d = fs.mkdtempSync(join(os.tmpdir(), 'tessel-ledger-'))
+    try {
+      saveTasks(d, [{ id: 'a' }], ['team-1/pane-1__1.json'])
+      expect(loadBoard(d)).toEqual({ tasks: [{ id: 'a' }], appliedRequests: ['team-1/pane-1__1.json'] })
+      expect(loadTasks(d)).toEqual([{ id: 'a' }])
+      // A board saved by an older version (a plain list): no ledger.
+      saveTasks(d, [{ id: 'b' }])
+      expect(loadBoard(d)).toEqual({ tasks: [{ id: 'b' }], appliedRequests: [] })
+    } finally {
+      fs.rmSync(d, { recursive: true, force: true })
+    }
+  })
+})

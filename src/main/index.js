@@ -3,7 +3,7 @@ import { join, isAbsolute } from 'path'
 import os from 'os'
 import fs from 'fs'
 import { spawn, execFile, execFileSync } from 'child_process'
-import { loadTasks, saveTasks } from './taskBoardPersistence'
+import { loadTasks, loadBoard, saveTasks } from './taskBoardPersistence'
 import { trimEvents, isEvent } from '../shared/activity'
 import { claudeSessionExists, findCodexSession, listSessions } from './agentSessions'
 import { createLogger, describe } from './logger'
@@ -416,18 +416,22 @@ ipcMain.on('layout:save', (_evt, data) => {
 // ---------------------------------------------------------------------------
 // The kanban task board is stored in its own task-board.json (see
 // taskBoardPersistence.js) so it never collides with workspace-layout.json.
-ipcMain.handle('taskboard:load', () => {
+// opts.withLedger: -> { tasks, appliedRequests } instead of the task list.
+ipcMain.handle('taskboard:load', (_evt, opts) => {
+  const withLedger = !!(opts && opts.withLedger)
   try {
-    return loadTasks(app.getPath('userData'))
+    return withLedger ? loadBoard(app.getPath('userData')) : loadTasks(app.getPath('userData'))
   } catch (err) {
     logCrashContext(`taskboard:load failed: ${err.message}`)
-    return []
+    return withLedger ? { tasks: [], appliedRequests: [] } : []
   }
 })
 
-ipcMain.handle('taskboard:save', (_evt, tasks) => {
+// The task list, or { tasks, appliedRequests } (saved together).
+ipcMain.handle('taskboard:save', (_evt, board) => {
   try {
-    saveTasks(app.getPath('userData'), tasks)
+    if (Array.isArray(board)) saveTasks(app.getPath('userData'), board)
+    else saveTasks(app.getPath('userData'), board && board.tasks, board && board.appliedRequests)
     return { ok: true }
   } catch (err) {
     logCrashContext(`taskboard:save failed: ${err.message}`)

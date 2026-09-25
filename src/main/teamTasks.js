@@ -103,15 +103,18 @@ export function takeTeamRequests({ dir, teamId } = {}) {
 export function finishTeamRequests({ dir, teamId, files } = {}) {
   const root = teamRoot(dir, teamId)
   if (!root || !Array.isArray(files)) return { ok: false, error: 'Invalid team location.' }
+  const removed = [] // gone for sure: they cannot come back
   for (const name of files) {
     if (typeof name !== 'string' || !/^[A-Za-z0-9._-]{1,100}__[A-Za-z0-9-]{1,80}\.json$/.test(name)) continue
+    const file = join(root, 'requests', name)
     try {
-      fs.rmSync(join(root, 'requests', name), { force: true })
+      fs.rmSync(file, { force: true })
     } catch {
-      // removed next round (applying it again changes nothing)
+      // removed next round (it is in the ledger: not applied again)
     }
+    if (!fs.existsSync(file)) removed.push(name)
   }
-  return { ok: true }
+  return { ok: true, removed }
 }
 
 // The status of team messages by id, read from the channel's state:

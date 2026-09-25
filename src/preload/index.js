@@ -105,7 +105,7 @@ const api = {
   // Task-board persistence. load() resolves to the saved task array ([] when
   // none); save(tasks) resolves to { ok: true } or { ok: false, error }.
   taskBoard: {
-    load: () => ipcRenderer.invoke('taskboard:load'),
+    load: (opts) => ipcRenderer.invoke('taskboard:load', opts),
     save: (tasks) => ipcRenderer.invoke('taskboard:save', tasks)
   },
 
