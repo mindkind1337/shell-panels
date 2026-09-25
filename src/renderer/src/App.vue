@@ -1452,7 +1452,12 @@ function sendToPane(fromId, toId, mode, text = '') {
   if (!target) return
   const ws = wsOfLeaf(fromId)
   const to = findLeaf(toId)
-  if (mode === 'review') {
+  if (mode === 'review' && to && to.kind === 'agent') {
+    // Like every message to an agent: not over a line being typed there, not
+    // during an approval, and Enter confirmed (deliver.js).
+    const from = findLeaf(fromId)
+    deliverToAgent(toId, reviewPrompt(from, ws), { source: 'you', scope: 'review', from: from ? from.title : null })
+  } else if (mode === 'review') {
     target.paste(reviewPrompt(findLeaf(fromId), ws))
     setTimeout(() => target.submit(), 150)
   } else {
@@ -1520,12 +1525,9 @@ async function copyDiagnostics() {
   showToast('Diagnostics copied. Paste them into your message.', { timeout: 4000 })
 }
 
+// The dialog gives focus back to what had it before (terminal or button).
 function closeSettings() {
   settingsOpen.value = false
-  nextTick(() => {
-    const ta = document.querySelector('.ws-layer:not(.hidden) .pane.active .xterm-helper-textarea')
-    if (ta) ta.focus()
-  })
 }
 
 function setDefaultShell(id) {
@@ -1535,6 +1537,7 @@ function setDefaultShell(id) {
 }
 
 // Replace a pane with a fresh process of the same kind, in the same spot.
+const restartingLeaves = new Set()
 async function restartLeaf(leafId) {
   const ws = wsOfLeaf(leafId)
   if (!ws) return
@@ -1543,11 +1546,24 @@ async function restartLeaf(leafId) {
     if (l.id === leafId) old = l
   })
   if (!old) return
+  // An agent keeps its pane id: its team messages, lead role, tasks and
+  // inbox stay addressed to it.
+  if (old.kind === 'agent' && old.agentCommand) {
+    if (restartingLeaves.has(leafId)) return
+    restartingLeaves.add(leafId)
+    try {
+      if (await restartInPlace(leafId, { resume: settings.resumeAgents })) return
+    } finally {
+      restartingLeaves.delete(leafId)
+    }
+    // Not possible in place (its old terminal would not stop): a new pane.
+    if (findLeaf(leafId) !== old) return
+  }
   const agent =
     old.kind === 'agent' && old.agentCommand
       ? { id: old.agentId, name: old.title, command: old.agentCommand, accent: old.accent }
       : null
-  const fresh = await createLeaf(old.shellId, agent, ws.cwd, old.worktree, {
+  const fresh = await createLeaf(old.shellId, agent, old.startDir || ws.cwd, old.worktree, {
     sessionId: old.sessionId,
     resume: settings.resumeAgents
   })
@@ -2430,7 +2446,11 @@ function flushPending() {
           if (item.held) logMessage(id, 'delivered', item.text, item.meta)
           if (item.meta && item.meta.onDelivered) item.meta.onDelivered()
         } else if (result === 'requeue') {
-          requeueDelivery(id, item)
+          // Not typed now (the user came back, or it is no longer needed). A
+          // message that would be stale later is dropped instead of waiting.
+          if (item.meta && item.meta.dropIfNotNow) {
+            if (item.meta.onDropped) item.meta.onDropped()
+          } else requeueDelivery(id, item)
         } else if (result === 'refused') {
           if (item.meta && item.meta.onRefused) item.meta.onRefused()
         } else if (result === 'unconfirmed') {
@@ -2903,18 +2923,7 @@ async function setTeamLead(teamId, leafId) {
   // The new lead's inbox first: if it cannot be made, nothing changes.
   let box = null
   if (leaf) {
-    const mates = teamMembers(teamId).filter((l) => l.id !== leaf.id)
-    const boxes = await syncChannel(team, { quiet: [leaf.id] })
-    const outbox = boxes && boxes[leaf.id] ? boxes[leaf.id].outbox : null
-    box = await assignInbox(team, leaf, (inbox) =>
-      leadGuide({
-        teamName: team.name,
-        inbox,
-        outbox,
-        members: mates.map(agentLabel),
-        kinds: taskAgentKinds.value.map((a) => a.id)
-      })
-    )
+    box = await assignLeadInbox(team, leaf)
     if (!box) {
       // Not the lead after all: the poll tells it about the channel instead.
       if (team.channelTold) delete team.channelTold[leaf.id]
@@ -2985,6 +2994,34 @@ async function assignInbox(team, leaf, guideFn = null) {
     return null
   }
   return { path, guide }
+}
+
+// The lead's inbox, with the lead's guide (tasks, reviews, messages).
+async function assignLeadInbox(team, leaf) {
+  const mates = teamMembers(team.id).filter((l) => l.id !== leaf.id)
+  const boxes = await syncChannel(team, { quiet: [leaf.id] })
+  const outbox = boxes && boxes[leaf.id] ? boxes[leaf.id].outbox : null
+  return assignInbox(team, leaf, (inbox) =>
+    leadGuide({
+      teamName: team.name,
+      inbox,
+      outbox,
+      members: mates.map(agentLabel),
+      kinds: taskAgentKinds.value.map((a) => a.id)
+    })
+  )
+}
+
+// The lead lost its inbox (folder deleted, or it could not be made): made
+// again by the poll, at most every 30 s, and the lead told the new path.
+const leadInboxRetry = {} // teamId -> time of the next try
+async function restoreLeadInbox(team, leaf) {
+  if (Date.now() < (leadInboxRetry[team.id] || 0)) return
+  leadInboxRetry[team.id] = Date.now() + 30000
+  const box = await assignLeadInbox(team, leaf)
+  if (!box || team.leadId !== leaf.id) return
+  delete leadInboxRetry[team.id]
+  tellAgents([leaf], `[Tessel] Your lead inbox was made again. ${box.guide}`, team.id)
 }
 
 // Inbox folders being made right now: the poll leaves them alone.
@@ -3139,8 +3176,13 @@ function runMemberMessage(team, from, req) {
 
 // Every few seconds: take each team member's requests and carry them out.
 let teamPolling = false
+// Nothing runs on teams until the layout and the board are restored: an early
+// round would see no members (lead "removed", inboxes dropped) and publish an
+// empty team list for the MCP tools.
+let teamsReady = false
+
 async function pollTeams() {
-  if (teamPolling || !window.shellApi.lead) return
+  if (!teamsReady || teamPolling || !window.shellApi.lead) return
   teamPolling = true
   try {
     for (const team of [...teams.value]) {
@@ -3168,7 +3210,10 @@ async function pollTeams() {
         if (token && inboxesBeingMade.has(token)) continue
         // Plain members message through the team channel; only the lead
         // (and members told about an inbox before) have one.
-        if (!token) continue
+        if (!token) {
+          if (team.leadId === m.id) await restoreLeadInbox(team, m)
+          continue
+        }
         const res = await window.shellApi.lead.take({ dir, token })
         // Its folder is gone (deleted by hand?): make it again next round.
         if (res && res.ok && res.missing) {
@@ -3334,7 +3379,9 @@ async function installTeamToolsOnce() {
 // agent CLI loads its MCP servers when it starts). Tessel restarts each one
 // once, in place (same pane, number, team and task, conversation resumed),
 // only when it is quiet, not waiting for an approval, and not in use.
-async function restartInPlace(leafId) {
+// opts.resume: resume the conversation (default: when it has one);
+// opts.forTools: restarted to load the team tools (it has them afterwards).
+async function restartInPlace(leafId, opts = {}) {
   const ws = wsOfLeaf(leafId)
   const old = findLeaf(leafId)
   if (!ws || !old || old.kind !== 'agent' || !old.agentCommand) return false
@@ -3347,25 +3394,32 @@ async function restartInPlace(leafId) {
     gone = !a || !a.ok
     if (!gone) window.shellApi.killPty(leafId)
   }
-  if (!gone) return false
+  // The pane was closed meanwhile: nothing to restart.
+  if (!gone || findLeaf(leafId) !== old) return false
   dropBuffer(leafId)
   clearAgentStatus(leafId)
   const agent = { id: old.agentId, name: old.title, command: old.agentCommand, accent: old.accent }
-  const fresh = await createLeaf(old.shellId, agent, ws.cwd, old.worktree, {
+  // Where it was started (a Codex conversation is found by its folder).
+  const fresh = await createLeaf(old.shellId, agent, old.startDir || ws.cwd, old.worktree, {
     id: leafId,
     sessionId: old.sessionId,
-    resume: !!old.sessionId
+    resume: !!old.sessionId && opts.resume !== false
   })
   if (!fresh) return false
+  if (findLeaf(leafId) !== old) {
+    // Closed while it was starting: do not leave its terminal running.
+    window.shellApi.killPty(leafId)
+    return false
+  }
   Object.assign(fresh, {
     title: old.title,
     broadcast: old.broadcast,
     num: old.num,
     team: old.team,
-    teamTools: true,
     gen: (old.gen || 0) + 1,
     restartedAt: Date.now()
   })
+  if (opts.forTools) fresh.teamTools = true
   ws.tree = replaceNode(ws.tree, leafId, () => fresh)
   return true
 }
@@ -3424,7 +3478,20 @@ function wakeIfNeeded(leaf) {
   deliverToAgent(
     leaf.id,
     `[Tessel] You have ${count} new team message${count > 1 ? 's' : ''}: read ${count > 1 ? 'them' : 'it'} with team_inbox.`,
-    { source: 'tessel', scope: 'wake', teamId: leaf.team, waitIdle: true, guard: () => wakeAllowed(leaf.id) }
+    {
+      source: 'tessel',
+      scope: 'wake',
+      teamId: leaf.team,
+      waitIdle: true,
+      // Still unread and still safe at the moment it is typed; otherwise the
+      // reminder (and its count) is dropped, and a fresh one comes later if
+      // messages still wait.
+      guard: () => (teamUnread[leaf.id] || 0) > 0 && wakeAllowed(leaf.id),
+      dropIfNotNow: true,
+      onDropped: () => {
+        if (wakeState[leaf.id]) wakeState[leaf.id].woken = false
+      }
+    }
   )
   if (window.shellApi.log) window.shellApi.log('info', `team tools: reminded ${paneLabel(leaf)} (${leaf.id}) of ${count} waiting message(s)`)
 }
@@ -3457,7 +3524,7 @@ async function restartForTeamTools() {
       restartedForTools.add(leaf.id)
       const title = paneLabel(leaf)
       try {
-        const ok = await restartInPlace(leaf.id)
+        const ok = await restartInPlace(leaf.id, { forTools: true })
         if (window.shellApi.log)
           window.shellApi.log(ok ? 'info' : 'error', `team tools: ${ok ? 'restarted' : 'could not restart'} ${title} (${leaf.id}) in place`)
         if (ok) showToast(`Restarted ${title} so it can use team messages. Its conversation continues.`, { timeout: 6000 })
@@ -4096,7 +4163,32 @@ function selectedShellName() {
   return shells.value.find((shell) => shell.id === selectedShell.value)?.name || 'Shell'
 }
 
+// A dialog is open over the panes: the pane shortcuts (split, close, restart,
+// broadcast, move focus…) must not act on the terminals behind it.
+function dialogOpen() {
+  return (
+    settingsOpen.value ||
+    mcpOpen.value ||
+    toolsOpen.value ||
+    sessionsOpen.value ||
+    helpOpen.value ||
+    updateOpen.value ||
+    newTaskOpen.value
+  )
+}
+
 function onKey(e) {
+  if (dialogOpen()) {
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === ',') {
+      e.preventDefault()
+      settingsOpen.value = !settingsOpen.value
+    } else if (e.key === 'F1') {
+      e.preventDefault()
+      helpOpen.value = !helpOpen.value
+    }
+    // Escape is left to the dialog itself (and to the closing code below).
+    if (e.key !== 'Escape') return
+  }
   if (e.ctrlKey && e.shiftKey) {
     const k = e.key.toLowerCase()
     if (k === 'e') {
@@ -4312,6 +4404,7 @@ onMounted(async () => {
   // next real change).
   reconcileTaskPanes()
   watch(boardTasks, scheduleTaskSave, { deep: true })
+  teamsReady = true
 
   window.addEventListener('keydown', onKey)
   window.addEventListener('pointerdown', onDocPointerDown, true)

@@ -1293,7 +1293,7 @@ onBeforeUnmount(() => {
       aria-label="Confirm paste"
       @mousedown.stop
       @contextmenu.stop.prevent
-      @keydown.enter.prevent.stop="confirmPaste"
+      @keydown.enter.stop="(e) => !e.target.closest('button') && (e.preventDefault(), confirmPaste())"
       @keydown.escape.prevent.stop="cancelPaste"
     >
       <div class="paste-ask-title">
