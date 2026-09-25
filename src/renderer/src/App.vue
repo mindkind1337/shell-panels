@@ -3467,7 +3467,11 @@ async function restartInPlace(leafId, opts = {}) {
 // after the agent has read everything.
 const WAKE_AFTER_MS = 10000 // an idle agent does not read by itself: remind it soon
 const USER_AWAY_MS = 30000
-const wakeState = {} // leafId -> { since, woken }
+// A reminder that did not work (the messages are still unread 5 minutes
+// later, say its team tools were down) is sent again; an agent restarted
+// since (gen) gets one at once.
+const REWAKE_AFTER_MS = 5 * 60 * 1000
+const wakeState = {} // leafId -> { since, woken, wokenAt, gen }
 // The user is not in this pane, has no line in progress there, and has not
 // typed there for 30 s.
 function wakeAllowed(id) {
@@ -3500,7 +3504,11 @@ function wakeIfNeeded(leaf) {
     delete wakeState[leaf.id]
     return
   }
-  const w = (wakeState[leaf.id] = wakeState[leaf.id] || { since: Date.now(), woken: false })
+  const w = (wakeState[leaf.id] = wakeState[leaf.id] || { since: Date.now(), woken: false, gen: leaf.gen || 0 })
+  if (w.woken && ((leaf.gen || 0) !== w.gen || Date.now() - (w.wokenAt || 0) >= REWAKE_AFTER_MS)) {
+    w.woken = false
+    w.gen = leaf.gen || 0
+  }
   if (w.woken || Date.now() - w.since < WAKE_AFTER_MS) return
   // Only an agent that has the team tools to read them.
   if (leaf.kind !== 'agent' || !leaf.teamTools) return
@@ -3509,6 +3517,7 @@ function wakeIfNeeded(leaf) {
   if (approvals[leaf.id] || limits[leaf.id] || pendingMessages[leaf.id] || unsent[leaf.id] || delivering.has(leaf.id)) return
   if (!wakeAllowed(leaf.id)) return
   w.woken = true
+  w.wokenAt = Date.now()
   deliverToAgent(
     leaf.id,
     `[Tessel] You have ${count} new team message${count > 1 ? 's' : ''}: read ${count > 1 ? 'them' : 'it'} with team_inbox.`,
