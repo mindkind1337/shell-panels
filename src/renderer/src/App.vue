@@ -3307,6 +3307,40 @@ async function restartInPlace(leafId) {
   return true
 }
 
+// Safe wake-up: an idle agent does not read its team messages by itself (it
+// reads them when it works). When messages have waited a minute, Tessel types
+// ONE short reminder line into its terminal, only when the agent is quiet
+// (no approval, no usage limit, nothing else being typed there) and the user
+// is not in that pane nor typed there in the last 30 s. The messages
+// themselves stay in the background. One reminder per batch: a new one only
+// after the agent has read everything.
+const WAKE_AFTER_MS = 60000
+const USER_AWAY_MS = 30000
+const wakeState = {} // leafId -> { since, woken }
+function wakeIfNeeded(leaf) {
+  const count = teamUnread[leaf.id] || 0
+  if (!count) {
+    delete wakeState[leaf.id]
+    return
+  }
+  const w = (wakeState[leaf.id] = wakeState[leaf.id] || { since: Date.now(), woken: false })
+  if (w.woken || Date.now() - w.since < WAKE_AFTER_MS) return
+  // Only an agent that has the team tools to read them.
+  if (leaf.kind !== 'agent' || !leaf.teamTools) return
+  const t = trackedState[leaf.id]
+  if (!t || t.state !== 'idle') return
+  if (approvals[leaf.id] || limits[leaf.id] || pendingMessages[leaf.id] || unsent[leaf.id] || delivering.has(leaf.id)) return
+  const inUse = (leaf.id === activeId.value && document.hasFocus()) || userDraft[leaf.id] || Date.now() - (lastUserKey[leaf.id] || 0) < USER_AWAY_MS
+  if (inUse) return
+  w.woken = true
+  deliverToAgent(
+    leaf.id,
+    `[Tessel] You have ${count} new team message${count > 1 ? 's' : ''}: read ${count > 1 ? 'them' : 'it'} with team_inbox.`,
+    { source: 'tessel', scope: 'wake', teamId: leaf.team, waitIdle: true }
+  )
+  if (window.shellApi.log) window.shellApi.log('info', `team tools: reminded ${paneLabel(leaf)} (${leaf.id}) of ${count} waiting message(s)`)
+}
+
 const restartedForTools = new Set()
 let restarting = false
 async function restartForTeamTools() {
@@ -3370,6 +3404,7 @@ async function deliverChannel(team, members) {
         if (counts[m.id]) teamUnread[m.id] = counts[m.id]
         else delete teamUnread[m.id]
       }
+      for (const m of members) wakeIfNeeded(m)
     }
     installTeamToolsOnce() // runs on its own (Claude and Codex take a while)
     restartForTeamTools()
