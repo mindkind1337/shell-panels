@@ -2594,7 +2594,7 @@ function agentReportedDone(paneId) {
   })
   if (lead && lead.id !== paneId) {
     updateTask(task.id, { leadReview: 'pending', teamId: task.teamId || leaf.team })
-    deliverToAgent(lead.id, leadReviewPrompt(task, leaf), { source: 'tessel', scope: 'lead', teamId: leaf.team, waitIdle: true })
+    noticeAgents([lead], leadReviewPrompt(task, leaf), leaf.team, { source: 'tessel', scope: 'lead', teamId: leaf.team })
     showToast(`${leaf.title} finished "${task.title}". ${lead.title} (lead) reviews it first.`, { timeout: 6000 })
     return
   }
@@ -2955,7 +2955,7 @@ function handOffLeadReviews(teamId, newLead = null) {
   for (const task of pending) {
     const worker = findLeaf(task.paneId)
     if (newLead && worker && newLead.id !== worker.id) {
-      deliverToAgent(newLead.id, leadReviewPrompt(task, worker), { source: 'tessel', scope: 'lead', teamId, waitIdle: true })
+      noticeAgents([newLead], leadReviewPrompt(task, worker), teamId, { source: 'tessel', scope: 'lead', teamId })
       continue
     }
     updateTask(task.id, { leadReview: null })
@@ -3062,7 +3062,7 @@ function runMemberMessage(team, from, req) {
     if (limits[l.id]) {
       logMessage(l.id, 'skipped', req.text, meta)
       skipped.push(paneLabel(l))
-    } else deliverToAgent(l.id, `${head} ${req.text}`, meta)
+    } else noticeAgents([l], `${head} ${req.text}`, team.id, meta)
   }
   return skipped.length ? `Not delivered to ${skipped.join(', ')}: usage limit reached.` : ''
 }
@@ -3119,18 +3119,38 @@ async function pollTeams() {
         }
         const text = answers.filter(Boolean)
         if (!text.length) continue
-        deliverToAgent(leaf.id, text.map((a) => `[Tessel] ${a}`).join('\n'), {
+        noticeAgents([leaf], text.map((a) => `[Tessel] ${a}`).join('\n'), team.id, {
           source: 'tessel',
           scope: 'lead',
-          teamId: team.id,
-          waitIdle: true
+          teamId: team.id
         })
       }
       await syncChannel(team)
       await deliverChannel(team, members)
     }
+    await publishCurrentTeams()
   } finally {
     teamPolling = false
+  }
+}
+
+// current.json per project: which agent is in which team now (the team
+// tools trust only this). A project whose teams are all gone gets an empty
+// map, and its old channels are retired.
+const teamDirsSeen = new Set()
+async function publishCurrentTeams() {
+  if (!window.shellApi.team) return
+  const byDir = {}
+  for (const team of teams.value) {
+    const dir = channelDir(team)
+    if (!dir) continue
+    teamDirsSeen.add(dir)
+    const panes = (byDir[dir] = byDir[dir] || {})
+    for (const l of teamMembers(team.id)) if (l.kind === 'agent' && l.num) panes[l.id] = { team: team.id, num: l.num }
+  }
+  for (const dir of teamDirsSeen) {
+    await window.shellApi.team.current({ dir, panes: byDir[dir] || {} })
+    await window.shellApi.team.retire({ dir, liveTeamIds: teams.value.filter((t) => channelDir(t) === dir).map((t) => t.id) })
   }
 }
 
@@ -3202,19 +3222,32 @@ async function ackChannel(dir, teamId, d, key, tries = 0) {
 let teamToolsReady = false
 // The team tools are set up for Claude Code and Codex once a team exists
 // (MCP server "tessel-team" + Claude Code hooks; listed in the MCP dialog).
-let teamToolsAsked = false
+let teamToolsNextTry = 0
+let teamToolsBusy = false
+let teamToolsFailed = ''
 async function installTeamToolsOnce() {
-  if (teamToolsAsked || !window.shellApi.installTeamTools) return
-  teamToolsAsked = true
-  const res = await window.shellApi.installTeamTools().catch(() => null)
-  if (res && res.ok && !(res.errors && res.errors.length)) teamToolsReady = true
-  if (res && res.ok && res.changed && res.changed.length) {
-    showToast(
-      'Team messages now go in the background, never into your terminals. Restart the agents of a team once so they can use it (see MCP servers: tessel-team).',
-      { timeout: 12000 }
-    )
-  } else if (res && res.errors && res.errors.length) {
-    showToast(`Team messages could not be fully set up: ${res.errors[0]}`, { kind: 'error', timeout: 10000 })
+  if (teamToolsReady || teamToolsBusy || Date.now() < teamToolsNextTry || !window.shellApi.installTeamTools) return
+  teamToolsBusy = true
+  let res = null
+  try {
+    res = await window.shellApi.installTeamTools()
+  } catch (err) {
+    res = { ok: false, errors: [err.message] }
+  } finally {
+    teamToolsBusy = false
+  }
+  if (res && res.ok) {
+    teamToolsReady = true
+    if (res.changed && res.changed.length)
+      showToast('Team messages now go in the background, never into your terminals (MCP servers: tessel-team).', { timeout: 10000 })
+    return
+  }
+  // Not (fully) set up: say so once per failure, and try again in 5 minutes.
+  teamToolsNextTry = Date.now() + 5 * 60 * 1000
+  const why = (res && res.errors && res.errors[0]) || 'unknown error'
+  if (why !== teamToolsFailed) {
+    teamToolsFailed = why
+    showToast(`Team messages are not set up yet: ${why} Tessel will try again in 5 minutes.`, { kind: 'error', timeout: 12000 })
   }
 }
 
@@ -3587,14 +3620,36 @@ async function tellTeam(teamId, text, opts = {}) {
   })
 }
 
-// Deliver a note from Tessel to some agents; ones out of usage are skipped.
+// A note from Tessel to some agents. For a team it is a background notice
+// (read with the team tools, never typed into a terminal); outside a team,
+// ones out of usage are skipped.
 function tellAgents(list, text, teamId = null) {
   const meta = { source: 'tessel', scope: 'team-change', teamId }
+  if (teamId) {
+    noticeAgents(list, text, teamId, meta)
+    return
+  }
   for (const leaf of list) {
     if (leaf.kind !== 'agent') continue
     if (limits[leaf.id]) logMessage(leaf.id, 'skipped', text, meta)
     else deliverToAgent(leaf.id, text, meta)
   }
+}
+
+// Background notices to agents of a team (notices.json, read with the team
+// tools). Without a project folder there is nowhere to keep them: skipped,
+// and still never typed.
+function noticeAgents(list, text, teamId, meta = { source: 'tessel', scope: 'team', teamId }) {
+  const team = teamById(teamId)
+  const dir = team ? channelDir(team) : null
+  const agents = list.filter((l) => l && l.kind === 'agent')
+  if (!dir || !window.shellApi.team) {
+    for (const l of agents) logMessage(l.id, 'skipped', text, meta)
+    return false
+  }
+  window.shellApi.team.notice({ dir, teamId, notices: agents.map((l) => ({ toId: l.id, text })) })
+  for (const l of agents) logMessage(l.id, 'sent', text, meta)
+  return true
 }
 
 function messageTeam(teamId, text) {

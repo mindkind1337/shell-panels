@@ -91,23 +91,21 @@ export function findTaskRef(tasks, ref) {
 export function memberGuide({ teamName, inbox, me, members, lead }) {
   return [
     `Team "${teamName}". You are ${me}. Teammates: ${members.length ? members.join(', ') : 'none yet'}${lead ? `; ${lead} leads the team` : ''}.`,
-    `To talk to a teammate, write one JSON file into ${inbox} (any name ending in .json): {"action":"message","to":"#3","text":"..."}. "to" can also be "team" (everyone)${lead ? ' or "lead"' : ''}. Tessel delivers it into their terminal within a few seconds, and their answers reach you the same way. Talk to each other directly this way: do not ask the user to pass messages on.`
+    'To talk to your teammates, use your Tessel team tools: team_inbox reads new messages (call it when you start and after each step), team_send writes to a teammate ("#3") or to "team". Nothing is ever typed into anyone\'s terminal. Talk to each other this way: do not ask the user to pass messages on.'
   ].join('\n')
 }
 
 // What the lead is told when it takes the role (also written as HOW-TO.md in
 // its inbox).
-export function leadGuide({ teamName, inbox, members, kinds, outbox = null }) {
+export function leadGuide({ teamName, inbox, members, kinds }) {
   return [
     `You now lead the team "${teamName}". Your teammates: ${members.length ? members.join(', ') : 'none yet'}.`,
     'Your job: split the goal into small tasks, give each to a teammate (or start a new agent), review what they finish, and tell the user when work is ready. You do not merge, discard or close anything: the user does that.',
-    `To give tasks and review, write one JSON file per request into ${inbox} (any name ending in .json). Tessel reads it within a few seconds, deletes it, and answers here with [Tessel] lines.`,
+    `To give tasks and review, write one JSON file per request into ${inbox} (any name ending in .json). Tessel reads it within a few seconds, deletes it, and answers in your team inbox (team_inbox).`,
     '- Give a task: {"action":"task","title":"Short title","brief":"What to do, which files, how to check it","agent":"#3"}. "agent" is a teammate number, or ' +
       (kinds.length ? kinds.map((k) => `"${k}"`).join(', ') : 'an agent kind') +
       ' to start a new agent. New agents work in their own copy (git branch); if the project cannot have one, the request is refused: add "own_copy": false to work in the project folder instead.',
-    outbox
-      ? `- Messages go through the team channel, not this folder: write {"to":"#3","text":"..."} (or "to":"team") as a .json file into your channel outbox ${outbox}. It waits until the teammate can read it, and you get a receipt. Teammates' messages appear here.`
-      : '- Message: {"action":"message","to":"#3","text":"..."} or "to":"team". Teammates write to you the same way; their messages appear here.',
+    '- Messages to teammates go through your Tessel team tools (team_send; read yours with team_inbox), not this folder. The review requests and answers from Tessel arrive there too.',
     '- After a teammate finishes, you get a review request with the task id. Then either {"action":"approve","task":"<task id>","note":"why it is good"} (the user is told it is ready to merge) or {"action":"changes","task":"<task id>","text":"what to fix"} (it goes back to the teammate).',
     'Keep tasks independent so teammates do not edit the same files at once.'
   ].join('\n')

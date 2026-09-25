@@ -5,6 +5,7 @@
 import fs from 'fs'
 import { join, resolve, isAbsolute } from 'path'
 import { ackTeamDelivery } from './teamChannel'
+import { removeNotice } from './teamNotices'
 
 const ID_RE = /^(?!\.)(?!.*\.\.)[A-Za-z0-9._-]{1,100}$/
 
@@ -23,9 +24,13 @@ export function takeTeamAcks({ dir, teamId } = {}) {
     } catch {
       continue // being written: next round
     }
-    const res = data && typeof data.id === 'string' && typeof data.toId === 'string'
-      ? ackTeamDelivery({ dir, teamId, id: data.id, toId: data.toId })
-      : { ok: false }
+    // A Tessel notice ("n-<id>") is simply removed once read.
+    const notice = data && typeof data.id === 'string' && data.id.startsWith('n-')
+    const res = notice
+      ? { ok: removeNotice({ dir, teamId, id: data.id.slice(2) }) }
+      : data && typeof data.id === 'string' && typeof data.toId === 'string'
+        ? ackTeamDelivery({ dir, teamId, id: data.id, toId: data.toId })
+        : { ok: false }
     // Done, or not a delivery any more (unknown / already confirmed): gone.
     if (res.ok || /Unknown delivery/.test(res.error || '') || !data) {
       try {

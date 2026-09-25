@@ -24,6 +24,7 @@ import {
 } from './agentTools'
 import { reviewInfo, reviewDiff, reviewMerge, reviewRemove } from './review'
 import { takeTeamAcks } from './teamAcks'
+import { addNotices, writeCurrentTeams, retireOldTeams } from './teamNotices'
 import { writeServerScript, installClaudeHooks, installCodexServer, claudeServerPresent, SERVER_NAME } from './teamInstall'
 import teamServerSource from './teamMcp/server.cjs?raw'
 import { ensureInbox, takeInbox, removeInbox } from './leadInbox'
@@ -726,6 +727,38 @@ ipcMain.handle('channel:ack', safe(ackTeamDelivery))
 ipcMain.handle('channel:hold', safe(holdTeamDelivery))
 ipcMain.handle('channel:release', safe(releaseTeamDelivery))
 ipcMain.handle('channel:acks', safe(takeTeamAcks))
+ipcMain.handle('team:notice', safe(addNotices))
+ipcMain.handle('team:current', safe(writeCurrentTeams))
+ipcMain.handle('team:retire', safe(retireOldTeams))
+
+// A Codex config.toml Tessel is about to write, checked by Codex itself in a
+// throwaway CODEX_HOME. -> { ok, error }
+function validateCodexConfig(text) {
+  const home = fs.mkdtempSync(join(os.tmpdir(), 'tessel-codex-check-'))
+  fs.writeFileSync(join(home, 'config.toml'), text, 'utf8')
+  const script = [
+    "$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')",
+    `$env:CODEX_HOME = '${home.replace(/'/g, "''")}'`,
+    'codex mcp list --json | Out-Null',
+    'exit $LASTEXITCODE'
+  ].join('; ')
+  return new Promise((resolveCheck) => {
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', script],
+      { windowsHide: true, timeout: 60000, env: cleanEnv(process.env) },
+      (err, _out, stderr) => {
+        try {
+          fs.rmSync(home, { recursive: true, force: true })
+        } catch {
+          // a temp folder
+        }
+        const why = String(stderr || '').split(/\r?\n/).find((l) => l.trim() && !/WARNING/.test(l)) || ''
+        resolveCheck(err ? { ok: false, error: why.trim() || 'codex mcp list failed' } : { ok: true })
+      }
+    )
+  })
+}
 
 // Team tools for agents (background messages, never typed into terminals):
 // the MCP server script, registered for Claude Code and Codex, plus Claude
@@ -748,18 +781,22 @@ ipcMain.handle(
       else errors.push(`Claude Code: ${res.error}`)
     }
     try {
-      if (installClaudeHooks(script)) changed.push('Claude Code: hooks for team messages')
+      const r = installClaudeHooks(script)
+      if (r.error) errors.push(`Claude Code hooks: ${r.error}`)
+      else if (r.changed) changed.push('Claude Code: hooks for team messages')
     } catch (err) {
       errors.push(`Claude Code hooks: ${err.message}`)
     }
     try {
-      if (installCodexServer(script)) changed.push('Codex: MCP server tessel-team')
+      const r = await installCodexServer(script, validateCodexConfig)
+      if (r.error) errors.push(`Codex: ${r.error}`)
+      else if (r.changed) changed.push('Codex: MCP server tessel-team')
     } catch (err) {
       errors.push(`Codex: ${err.message}`)
     }
     if (changed.length) log.info('team', `team tools set up: ${changed.join('; ')}`)
     if (errors.length) log.error('team', `team tools: ${errors.join('; ')}`)
-    return { ok: true, script, changed, errors }
+    return { ok: errors.length === 0, script, changed, errors }
   })
 )
 ipcMain.handle(

@@ -22,7 +22,8 @@
 const fs = require('fs')
 const path = require('path')
 
-const VERSION = '1.0.0'
+const VERSION = '1.1.0'
+const MAX_TEXT = 6000
 
 // --- Finding my team and me ---------------------------------------------------
 
@@ -50,34 +51,39 @@ function readJson(file) {
   }
 }
 
-// -> { root, state, meId, me } or { error }
+// Tessel writes <project>/.tessel/team-channel/current.json:
+// { panes: { <paneId>: { team, num } } } for the teams that exist now. Only
+// those count: a folder of a team that was ungrouped is never used.
+//
+// When Tessel started this agent, TESSEL_PANE_ID says who it is, and nothing
+// else can change that. Only without it, "me" ("#4") is used, and only when
+// it matches exactly one agent.
+// -> { root, state, meId, me, teamId } or { error }
 function locate(meArg, start) {
   const paneId = process.env.TESSEL_PANE_ID || ''
   const num = /^#?(\d{1,3})$/.exec(String(meArg || '').trim())
-  for (const dir of candidateDirs(start)) {
-    const base = path.join(dir, '.tessel', 'team-channel')
-    let teams = []
-    try {
-      teams = fs.readdirSync(base)
-    } catch {
-      continue
-    }
-    for (const t of teams) {
-      const root = path.join(base, t)
-      const state = readJson(path.join(root, 'state.json'))
-      if (!state || !state.members) continue
-      let meId = null
-      if (paneId && state.members[paneId] && state.members[paneId].active) meId = paneId
-      else if (num) {
-        const hit = Object.entries(state.members).find(([, m]) => m.active && m.num === Number(num[1]))
-        if (hit) meId = hit[0]
-      }
-      if (meId) return { root, state, meId, me: state.members[meId] }
-    }
-  }
   if (!paneId && !num)
     return { error: 'Tessel does not know who you are: pass your pane number as "me", e.g. {"me":"#4"}.' }
-  return { error: 'No Tessel team found for you here. Are you in a team (Sessions in Tessel)?' }
+  const hits = []
+  for (const dir of candidateDirs(start)) {
+    const base = path.join(dir, '.tessel', 'team-channel')
+    const current = readJson(path.join(base, 'current.json'))
+    if (!current || !current.panes) continue
+    for (const [id, p] of Object.entries(current.panes)) {
+      if (!p || typeof p.team !== 'string') continue
+      const mine = paneId ? id === paneId : p.num === Number(num[1])
+      if (mine && !hits.some((h) => h.id === id)) hits.push({ id, team: p.team, base })
+    }
+    if (hits.length) break
+  }
+  if (!hits.length) return { error: 'You are not in a Tessel team right now (see Sessions in Tessel).' }
+  if (hits.length > 1) return { error: `"${meArg}" matches several agents: Tessel cannot tell which one you are.` }
+  const { id, team, base } = hits[0]
+  const root = path.join(base, team)
+  const state = readJson(path.join(root, 'state.json'))
+  if (!state || !state.members || !state.members[id] || !state.members[id].active)
+    return { error: 'Your team is being set up in Tessel: try again in a few seconds.' }
+  return { root, state, meId: id, me: state.members[id], teamId: team }
 }
 
 // --- Inbox ---------------------------------------------------------------------
@@ -87,8 +93,10 @@ function ackPath(root, toId, id) {
   return path.join(root, 'acks', `${safe(toId)}__${safe(id)}.json`)
 }
 
-// Messages for me not yet read. Delivery receipts are marked read without
-// being shown (they only say another message arrived).
+// Messages for me not yet read: teammates' (state.json) and Tessel's own
+// notices (notices.json: team changes, answers to a lead). Delivery receipts
+// are marked read without being shown (they only say another message
+// arrived).
 function unread(ctx) {
   const list = []
   for (const m of ctx.state.messages || []) {
@@ -96,17 +104,43 @@ function unread(ctx) {
     if (fs.existsSync(ackPath(ctx.root, m.toId, m.id))) continue
     list.push(m)
   }
+  const notices = readJson(path.join(ctx.root, 'notices.json'))
+  for (const n of (notices && notices.notices) || []) {
+    if (n.toId !== ctx.meId) continue
+    const id = `n-${n.id}`
+    if (fs.existsSync(ackPath(ctx.root, n.toId, id))) continue
+    list.push({ id, fromId: 'tessel', toId: n.toId, text: n.text, notice: true })
+  }
   return list
 }
 
+// Marks each message read, one by one, and returns those that were: a
+// message whose read note could not be written stays unread and is not
+// shown, so nothing is ever marked read without being seen.
 function markRead(ctx, messages) {
-  fs.mkdirSync(path.join(ctx.root, 'acks'), { recursive: true })
+  const done = []
+  try {
+    fs.mkdirSync(path.join(ctx.root, 'acks'), { recursive: true })
+  } catch {
+    return done
+  }
   for (const m of messages) {
     const file = ackPath(ctx.root, m.toId, m.id)
     const tmp = `${file}.${process.pid}.tmp`
-    fs.writeFileSync(tmp, JSON.stringify({ id: m.id, toId: m.toId, at: Date.now() }))
-    fs.renameSync(tmp, file)
+    try {
+      fs.writeFileSync(tmp, JSON.stringify({ id: m.id, toId: m.toId, at: Date.now() }))
+      fs.renameSync(tmp, file)
+      done.push(m)
+    } catch {
+      try {
+        fs.rmSync(tmp, { force: true })
+      } catch {
+        // nothing to clean
+      }
+      break
+    }
   }
+  return done
 }
 
 function label(ctx, id) {
@@ -121,9 +155,7 @@ function isReceipt(m) {
 
 // -> text shown to the agent ('' when nothing new)
 function readInbox(ctx) {
-  const list = unread(ctx)
-  const shown = list.filter((m) => !isReceipt(m))
-  markRead(ctx, list)
+  const shown = markRead(ctx, unread(ctx)).filter((m) => !isReceipt(m))
   return shown
     .map((m) => `[${label(ctx, m.fromId)} → you, message ${m.id}${m.replyTo ? `, reply to ${m.replyTo}` : ''}] ${m.text}`)
     .join('\n')
@@ -139,7 +171,9 @@ function send(ctx, to, text, replyTo) {
   const box = path.join(ctx.root, 'outbox', ctx.me.token)
   fs.mkdirSync(box, { recursive: true })
   const name = `mcp-${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 8)}`
-  const payload = { to: target, text: body.slice(0, 6000) }
+  if (body.length > MAX_TEXT)
+    return { error: `The message is too long (${body.length} characters, at most ${MAX_TEXT}): nothing was sent. Split it in several messages.` }
+  const payload = { to: target, text: body }
   if (replyTo) payload.reply_to = String(replyTo).slice(0, 80)
   fs.writeFileSync(path.join(box, `${name}.tmp`), JSON.stringify(payload))
   fs.renameSync(path.join(box, `${name}.tmp`), path.join(box, `${name}.json`))
@@ -286,4 +320,4 @@ if (require.main === module) {
   else serve()
 }
 
-module.exports = { locate, readInbox, send, members, handle, candidateDirs, ackPath }
+module.exports = { locate, readInbox, send, members, handle, candidateDirs, ackPath, markRead, unread }

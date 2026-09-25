@@ -62,6 +62,12 @@ const api = {
   },
   // Set up the team tools (MCP server + Claude hooks) for agent CLIs.
   installTeamTools: () => ipcRenderer.invoke('team:install'),
+  // Background team information (never typed into terminals).
+  team: {
+    notice: (args) => ipcRenderer.invoke('team:notice', args),
+    current: (args) => ipcRenderer.invoke('team:current', args),
+    retire: (args) => ipcRenderer.invoke('team:retire', args)
+  },
   review: {
     info: (args) => ipcRenderer.invoke('review:info', args),
     diff: (args) => ipcRenderer.invoke('review:diff', args),
