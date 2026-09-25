@@ -2619,7 +2619,6 @@ async function setTeamLead(teamId, leafId) {
 async function assignInbox(team, leaf, guideFn = null) {
   const dir = teamDir(team.id)
   if (!dir || !window.shellApi.lead) return null
-  const fresh = !(team.inboxes && team.inboxes[leaf.id])
   const token = reserveInbox(team, leaf)
   const path = inboxPathFor(dir, token)
   const lead = teamLead(team.id)
@@ -2633,17 +2632,24 @@ async function assignInbox(team, leaf, guideFn = null) {
         lead: lead && lead.id !== leaf.id ? paneLabel(lead) : null
       })
   let res = null
+  inboxesBeingMade.add(token)
   try {
     res = await window.shellApi.lead.ensure({ dir, token, guide })
   } catch (err) {
     res = { ok: false, error: err.message }
+  } finally {
+    inboxesBeingMade.delete(token)
   }
   if (!res || !res.ok) {
-    if (fresh && team.inboxes && team.inboxes[leaf.id] === token) delete team.inboxes[leaf.id]
+    // Forget the token (even one reserved earlier): the poll makes it again.
+    if (team.inboxes && team.inboxes[leaf.id] === token) delete team.inboxes[leaf.id]
     return null
   }
   return { path, guide }
 }
+
+// Inbox folders being made right now: the poll leaves them alone.
+const inboxesBeingMade = new Set()
 
 // The inbox token of a member, made at once (no folder yet), so two callers
 // never make two.
@@ -2815,6 +2821,7 @@ async function pollTeams() {
       if (!dir) continue
       for (const m of members) {
         const token = team.inboxes && team.inboxes[m.id]
+        if (token && inboxesBeingMade.has(token)) continue
         if (!token) {
           // A team from before inboxes existed: set one up and say how.
           const box = await assignInbox(team, m)
@@ -2822,6 +2829,11 @@ async function pollTeams() {
           continue
         }
         const res = await window.shellApi.lead.take({ dir, token })
+        // Its folder is gone (deleted by hand?): make it again next round.
+        if (res && res.ok && res.missing) {
+          delete team.inboxes[m.id]
+          continue
+        }
         if (!res || !res.ok || !res.items.length) continue
         const leaf = findLeaf(m.id)
         if (!leaf || leaf.team !== team.id) continue

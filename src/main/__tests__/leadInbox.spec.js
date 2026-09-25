@@ -37,6 +37,10 @@ describe('lead inbox', () => {
     expect(takeInbox({ dir, token }).items).toEqual([])
   })
 
+  it('says when the folder is missing', () => {
+    expect(takeInbox({ dir, token })).toEqual({ ok: true, items: [], missing: true })
+  })
+
   it('waits for a half-written file, then reports it', () => {
     const { path } = ensureInbox({ dir, token })
     const f = join(path, 'x.json')

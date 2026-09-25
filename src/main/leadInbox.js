@@ -29,7 +29,7 @@ export function ensureInbox({ dir, token, guide } = {}) {
 export function takeInbox({ dir, token } = {}) {
   const path = inboxPath({ dir, token })
   if (!path) return { ok: false, error: 'bad inbox' }
-  if (!fs.existsSync(path)) return { ok: true, items: [] }
+  if (!fs.existsSync(path)) return { ok: true, items: [], missing: true }
   const names = fs
     .readdirSync(path, { withFileTypes: true })
     .filter((d) => d.isFile() && d.name.toLowerCase().endsWith('.json'))
