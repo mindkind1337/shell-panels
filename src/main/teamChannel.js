@@ -65,6 +65,7 @@ function guide(outbox, members, selfId) {
     `Teammates: ${others.length ? others.join(', ') : 'none yet'}.`,
     'To message someone, write one JSON file with a unique name ending in .json into this outbox.',
     'Example: {"to":"#2","text":"Can you review the API?"}. Use "to":"team" to reach every teammate.',
+    'Use a JSON serializer (JSON.stringify or ConvertTo-Json), especially when text includes Windows paths, quotes or newlines.',
     'To reply, write another file and add "reply_to":"<message id>" when you have an id.',
     'Tessel queues messages while an agent is busy, awaiting approval or offline. It gives you delivery status in your terminal.',
     'Write each file completely, preferably under a temporary name, then rename it to .json.'
