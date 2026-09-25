@@ -3141,6 +3141,9 @@ const teamDirsSeen = new Set()
 async function publishCurrentTeams() {
   if (!window.shellApi.team) return
   const byDir = {}
+  // Open projects too: after a reload with no team left, a project's old
+  // map is still cleaned up.
+  for (const ws of workspaces.value) if (ws.cwd) teamDirsSeen.add(ws.cwd)
   for (const team of teams.value) {
     const dir = channelDir(team)
     if (!dir) continue
@@ -3150,7 +3153,13 @@ async function publishCurrentTeams() {
   }
   for (const dir of teamDirsSeen) {
     await window.shellApi.team.current({ dir, panes: byDir[dir] || {} })
-    await window.shellApi.team.retire({ dir, liveTeamIds: teams.value.filter((t) => channelDir(t) === dir).map((t) => t.id) })
+    const res = await window.shellApi.team.retire({ dir, liveTeamIds: teams.value.filter((t) => channelDir(t) === dir).map((t) => t.id) })
+    // A retired channel is set up again from scratch if its team comes back
+    // (Undo after Ungroup): forget what this session knew about it.
+    for (const id of (res && res.retired) || []) {
+      delete channelSigs[id]
+      delete channelBoxes[id]
+    }
   }
 }
 

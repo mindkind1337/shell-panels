@@ -37,6 +37,8 @@ export function writeCurrentTeams({ dir, panes } = {}) {
   for (const [id, p] of Object.entries(panes)) {
     if (ID_RE.test(id) && p && ID_RE.test(String(p.team)) && Number.isInteger(p.num)) clean[id] = { team: p.team, num: p.num }
   }
+  // A project that never had a team gets no folder just for an empty map.
+  if (!Object.keys(clean).length && !fs.existsSync(b)) return { ok: true, changed: false }
   fs.mkdirSync(b, { recursive: true })
   const file = join(b, 'current.json')
   const old = readJson(file)
