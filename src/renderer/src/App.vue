@@ -3357,8 +3357,27 @@ const wakeState = {} // leafId -> { since, woken }
 // typed there for 30 s.
 function wakeAllowed(id) {
   if (id === activeId.value && document.hasFocus()) return false
-  if (userDraft[id] || draftUnknown[id]) return false
+  if (userDraft[id]) return false
+  // Unknown line: shown empty on screen now = known empty from here on (the
+  // user's next key is tracked again by noteUserInput).
+  if (draftUnknown[id]) {
+    if (!inputShownEmpty(id)) return false
+    delete draftUnknown[id]
+  }
   return Date.now() - (lastUserKey[id] || 0) >= USER_AWAY_MS
+}
+
+// Proof on screen that an agent's input line is empty: Codex shows its
+// placeholder "Ask Codex to do anything" only when nothing is typed there.
+// (Claude Code has no such sign: an unknown line there stays unknown.)
+function inputShownEmpty(id) {
+  const leaf = findLeaf(id)
+  const pane = getPane(id)
+  if (!leaf || leaf.agentId !== 'codex' || !pane || !pane.screenText) return false
+  return pane
+    .screenText(6)
+    .split(/\r?\n/)
+    .some((line) => /^\s*›\s+Ask Codex to do anything\s*$/.test(line))
 }
 function wakeIfNeeded(leaf) {
   const count = teamUnread[leaf.id] || 0
