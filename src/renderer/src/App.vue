@@ -1604,7 +1604,7 @@ function setDefaultShell(id) {
 // Replace a pane with a fresh process of the same kind, in the same spot.
 const restartingLeaves = new Set()
 async function restartLeaf(leafId) {
-  const ws = wsOfLeaf(leafId)
+  let ws = wsOfLeaf(leafId)
   if (!ws) return
   let old = null
   forEachLeaf(ws.tree, (l) => {
@@ -1614,14 +1614,8 @@ async function restartLeaf(leafId) {
   // An agent keeps its pane id: its team messages, lead role, tasks and
   // inbox stay addressed to it.
   if (old.kind === 'agent' && old.agentCommand) {
-    if (restartingLeaves.has(leafId)) return
-    restartingLeaves.add(leafId)
-    let ok = false
-    try {
-      ok = await restartInPlace(leafId, { resume: settings.resumeAgents })
-    } finally {
-      restartingLeaves.delete(leafId)
-    }
+    if (restartingLeaves.has(leafId)) return // already restarting
+    const ok = await restartInPlace(leafId, { resume: settings.resumeAgents })
     // Never a new id for an agent (its messages would stay addressed to the
     // old one): if its old terminal would not stop, say so and leave it.
     if (!ok && findLeaf(leafId) === old)
@@ -1637,6 +1631,13 @@ async function restartLeaf(leafId) {
     resume: settings.resumeAgents
   })
   if (!fresh) return
+  // Closed, or moved to another workspace, while it was starting.
+  const now = wsOfLeaf(leafId)
+  if (!now || findLeaf(leafId) !== old) {
+    window.shellApi.killPty(fresh.id)
+    return
+  }
+  ws = now
   fresh.title = old.title
   fresh.broadcast = old.broadcast
   if (old.num) fresh.num = old.num
@@ -2976,8 +2977,18 @@ function randomToken() {
 }
 
 // Make leafId the lead of its team, or (leafId null) leave the team without one.
-async function setTeamLead(teamId, leafId) {
+// Lead changes of a team run one after the other: two quick changes would
+// both see the same "old" lead, and the first new lead would never be told
+// it no longer leads.
+const leadChanges = {} // teamId -> the change running now
+function setTeamLead(teamId, leafId) {
   closeMenus()
+  const run = (leadChanges[teamId] || Promise.resolve()).then(() => changeTeamLead(teamId, leafId))
+  leadChanges[teamId] = run.catch(() => {})
+  return run
+}
+
+async function changeTeamLead(teamId, leafId) {
   const team = teamById(teamId)
   if (!team) return
   const old = teamLead(teamId)
@@ -2993,6 +3004,11 @@ async function setTeamLead(teamId, leafId) {
   let box = null
   if (leaf) {
     box = await assignLeadInbox(team, leaf)
+    // It left the team (or the team is gone) meanwhile: not the lead.
+    if (box && (!teamById(teamId) || !findLeaf(leaf.id) || findLeaf(leaf.id).team !== teamId)) {
+      dropInbox(team, leaf.id, dir)
+      return
+    }
     if (!box) {
       // Not the lead after all: the poll tells it about the channel instead.
       if (team.channelTold) delete team.channelTold[leaf.id]
@@ -3004,8 +3020,8 @@ async function setTeamLead(teamId, leafId) {
     }
   }
   team.leadId = leaf ? leaf.id : null
-  if (old) {
-    // Its inbox stays, for messages only.
+  // Still in the team after the wait: its inbox stays, for messages only.
+  if (old && findLeaf(old.id) && findLeaf(old.id).team === teamId) {
     await assignInbox(team, old)
     tellAgents([old], `[Tessel] You no longer lead the team "${team.name}". Your inbox now takes messages only.`, teamId)
   }
@@ -3293,7 +3309,7 @@ async function pollTeams() {
       const members = teamMembers(team.id).filter((l) => l.kind === 'agent')
       // Inboxes of agents no longer in the team go away.
       for (const id of Object.keys(team.inboxes || {})) {
-        if (!members.some((m) => m.id === id)) dropInbox(team, id, dir)
+        if (!members.some((m) => m.id === id) && !inboxesBeingMade.has(team.inboxes[id])) dropInbox(team, id, dir)
       }
       if (!dir) {
         // The channel keeps its own folder (channelDir): still deliver.
@@ -3321,7 +3337,8 @@ async function pollTeams() {
         const res = await window.shellApi.lead.take({ dir, token })
         // Its folder is gone (deleted by hand?): make it again next round.
         if (res && res.ok && res.missing) {
-          delete team.inboxes[m.id]
+          // Only if it is still that inbox (a new one may be being made).
+          if (team.inboxes[m.id] === token && !inboxesBeingMade.has(token)) delete team.inboxes[m.id]
           continue
         }
         if (!res || !res.ok || !res.items.length) continue
@@ -3506,9 +3523,19 @@ async function installTeamToolsOnce() {
 // opts.resume: resume the conversation (default: when it has one);
 // opts.forTools: restarted to load the team tools (it has them afterwards).
 async function restartInPlace(leafId, opts = {}) {
-  const ws = wsOfLeaf(leafId)
+  // One restart at a time per pane (the automatic one and the user's).
+  if (restartingLeaves.has(leafId)) return false
+  restartingLeaves.add(leafId)
+  try {
+    return await restartInPlaceNow(leafId, opts)
+  } finally {
+    restartingLeaves.delete(leafId)
+  }
+}
+
+async function restartInPlaceNow(leafId, opts) {
   const old = findLeaf(leafId)
-  if (!ws || !old || old.kind !== 'agent' || !old.agentCommand) return false
+  if (!wsOfLeaf(leafId) || !old || old.kind !== 'agent' || !old.agentCommand) return false
   window.shellApi.killPty(leafId)
   // Wait until its terminal is really gone, so the new one gets the same id.
   let gone = false
@@ -3524,7 +3551,7 @@ async function restartInPlace(leafId, opts = {}) {
   clearAgentStatus(leafId)
   const agent = { id: old.agentId, name: old.title, command: old.agentCommand, accent: old.accent }
   // Where it was started (a Codex conversation is found by its folder).
-  const fresh = await createLeaf(old.shellId, agent, old.startDir || ws.cwd, old.worktree, {
+  const fresh = await createLeaf(old.shellId, agent, old.startDir || (wsOfLeaf(leafId) || {}).cwd, old.worktree, {
     id: leafId,
     sessionId: old.sessionId,
     resume: !!old.sessionId && opts.resume !== false
@@ -3550,6 +3577,12 @@ async function restartInPlace(leafId, opts = {}) {
   // A new terminal: its input line is empty (a draft typed in the old one is
   // gone), so reminders and restarts are not held back by it.
   setDraft(leafId, false)
+  // The workspace it is in now (it may have been moved during the wait).
+  const ws = wsOfLeaf(leafId)
+  if (!ws) {
+    window.shellApi.killPty(leafId)
+    return false
+  }
   ws.tree = replaceNode(ws.tree, leafId, () => fresh)
   return true
 }
