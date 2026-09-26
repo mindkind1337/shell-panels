@@ -3,6 +3,14 @@
 // Code and Codex. The pure helpers are exported for unit tests.
 import { execFile, spawn } from 'child_process'
 import { cleanEnv } from './cleanEnv'
+import {
+  JSON_AGENTS,
+  listJsonAgent,
+  jsonAgentConfig,
+  configToEntry,
+  setJsonAgentServer,
+  removeJsonAgentServer
+} from './jsonAgents'
 import { join, dirname, basename } from 'path'
 import os from 'os'
 import fs from 'fs'
@@ -391,7 +399,10 @@ export async function listMcp(cwd) {
       ? 'Codex is not installed.'
       : cliError(res, 'Could not list Codex servers.')
   }
-  return { claude, codex, codexError }
+  // Gemini CLI, Qwen Code, Copilot CLI, OpenCode: their settings files.
+  const others = {}
+  for (const agent of JSON_AGENTS) others[agent] = listJsonAgent(agent)
+  return { claude, codex, codexError, others }
 }
 
 // spec: { agent: 'claude'|'codex', name, transport: 'stdio'|'http',
@@ -452,6 +463,19 @@ export async function addMcp(spec) {
     const res = await runAgentCli('codex', args, cwd)
     return res.ok ? { ok: true } : { ok: false, error: cliError(res, 'codex mcp add failed') }
   }
+  if (JSON_AGENTS.includes(agent)) {
+    let cfg
+    if (transport === 'http') {
+      if (!/^https?:\/\//i.test(spec.url || ''))
+        return { ok: false, error: 'Enter a URL starting with http:// or https://' }
+      cfg = { transport: 'http', url: spec.url, headers }
+    } else {
+      const words = splitCommandLine(spec.commandLine)
+      if (!words.length) return { ok: false, error: 'Enter the command that starts the server.' }
+      cfg = { transport: 'stdio', command: words[0], args: words.slice(1), env }
+    }
+    return setJsonAgentServer(agent, name, configToEntry(agent, cfg))
+  }
   return { ok: false, error: 'Unknown agent.' }
 }
 
@@ -470,6 +494,7 @@ export async function removeMcp({ agent, name, scope, cwd }) {
     const res = await runAgentCli('codex', ['mcp', 'remove', name], cwd)
     return res.ok ? { ok: true } : { ok: false, error: cliError(res, 'codex mcp remove failed') }
   }
+  if (JSON_AGENTS.includes(agent)) return removeJsonAgentServer(agent, name)
   return { ok: false, error: 'Unknown agent.' }
 }
 
@@ -531,6 +556,7 @@ async function fullConfig({ agent, name, scope, cwd }) {
       return null
     }
   }
+  if (JSON_AGENTS.includes(agent)) return jsonAgentConfig(agent, name)
   return null
 }
 
@@ -765,6 +791,10 @@ function quoteWord(w) {
 export async function copyMcp({ from, to, name, scope, cwd }) {
   const cfg = await fullConfig({ agent: from, name, scope, cwd })
   if (!cfg) return { ok: false, error: 'Server not found.' }
+  if (JSON_AGENTS.includes(to)) {
+    const res = setJsonAgentServer(to, name, configToEntry(to, { ...cfg, args: cfg.args || [], env: cfg.env || {}, headers: cfg.headers || {} }))
+    return res.ok ? { ok: true, note: null } : res
+  }
   const spec = { agent: to, name, scope: 'user', cwd }
   if (cfg.transport === 'http') {
     spec.transport = 'http'

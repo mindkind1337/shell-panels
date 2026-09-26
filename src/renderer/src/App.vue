@@ -3395,9 +3395,11 @@ async function pollTeams() {
     await syncSoloBoards(round)
     if (roundGone(round)) return
     // The team tools (messages and the task board) are set up as soon as
-    // Claude Code or Codex is here, not only once a team exists: an agent
+    // an agent CLI is here (Claude Code, Codex, Gemini, Qwen, Copilot,
+    // OpenCode), not only once a team exists: an agent
     // working alone uses the board too.
-    if (agents.value.some((a) => (a.id === 'claude' || a.id === 'codex') && a.available)) installTeamToolsOnce()
+    const MCP_AGENTS = ['claude', 'codex', 'gemini', 'qwen', 'copilot', 'opencode']
+    if (agents.value.some((a) => MCP_AGENTS.includes(a.id) && a.available)) installTeamToolsOnce()
     teamStepIs('team map')
     await publishCurrentTeams()
   } finally {

@@ -26,6 +26,7 @@ import { reviewInfo, reviewDiff, reviewMerge, reviewRemove } from './review'
 import { takeTeamAcks } from './teamAcks'
 import { writeJsonSafe, readJsonSafe } from './safeJson'
 import { addNotices, writeCurrentTeams, retireOldTeams } from './teamNotices'
+import { JSON_AGENTS, setJsonAgentServer, teamToolsEntry } from './jsonAgents'
 import { publishTeamTasks, takeTeamRequests, finishTeamRequests, messageStatuses, writeBoardPanes } from './teamTasks'
 import {
   writeServerScript,
@@ -829,6 +830,15 @@ ipcMain.handle(
       else if (r.changed) changed.push('Codex: MCP server tessel-team')
     } catch (err) {
       errors.push(`Codex: ${err.message}`)
+    }
+    // Gemini CLI, Qwen Code, Copilot CLI, OpenCode: in their settings file,
+    // for those installed here (a file Tessel cannot read is left alone).
+    for (const agent of JSON_AGENTS) {
+      const preset = getAgents().find((a) => a.id === agent)
+      if (!preset || !preset.available) continue
+      const r = setJsonAgentServer(agent, SERVER_NAME, teamToolsEntry(agent, script))
+      if (!r.ok) errors.push(`${preset.name}: ${r.error}`)
+      else if (r.changed) changed.push(`${preset.name}: MCP server tessel-team`)
     }
     if (changed.length) log.info('team', `team tools set up: ${changed.join('; ')}`)
     if (errors.length) log.error('team', `team tools: ${errors.join('; ')}`)

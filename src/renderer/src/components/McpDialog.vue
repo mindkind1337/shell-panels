@@ -1,12 +1,15 @@
 <script setup>
-// MCP servers for Claude Code and Codex, in one place:
+// MCP servers for every agent CLI (Claude Code, Codex, Gemini CLI, Qwen Code,
+// Copilot CLI, OpenCode), in one place:
 //   Installed - every server, which agents have it, a live connection test,
 //               copy to the other agent, sign-in help, remove.
 //   Catalog   - popular servers, searchable, added in one click (asks only
 //               for what the server needs: a folder, an API key...).
 //   Custom    - any other server, by command or URL.
-// All changes go through each agent's own CLI, so the config stays in the
-// format each agent expects. Running agents load changes when restarted.
+// Claude Code and Codex are changed through their own CLI; the others in their
+// settings file, in the format each expects (src/main/jsonAgents.js). Only the
+// agents installed here (or that already have servers) are shown. Running
+// agents load changes when restarted.
 import { ref, reactive, computed, onMounted, inject } from 'vue'
 import BrandIcon from './BrandIcon.vue'
 import { MCP_CATALOG, MCP_CATEGORIES, catalogSpec } from '../mcpCatalog'
@@ -17,8 +20,15 @@ const props = defineProps({
 })
 const emit = defineEmits(['close', 'run', 'tools'])
 
-const AGENTS = ['claude', 'codex']
-const AGENT_NAME = { claude: 'Claude Code', codex: 'Codex' }
+const ALL_AGENTS = ['claude', 'codex', 'gemini', 'qwen', 'copilot', 'opencode']
+const AGENT_NAME = {
+  claude: 'Claude Code',
+  codex: 'Codex',
+  gemini: 'Gemini CLI',
+  qwen: 'Qwen Code',
+  copilot: 'Copilot CLI',
+  opencode: 'OpenCode'
+}
 const SCOPE_LABEL = {
   user: 'All projects',
   local: 'This project (private)',
@@ -28,16 +38,22 @@ const SCOPE_LABEL = {
 const cardEl = ref(null)
 const tab = ref('installed')
 const loading = ref(true)
-const lists = reactive({ claude: [], codex: [], codexError: null })
+const lists = reactive({ claude: [], codex: [], gemini: [], qwen: [], copilot: [], opencode: [], codexError: null })
+const listErrors = reactive({}) // agent -> why its servers could not be read
 const busy = ref('') // key of the action in progress
 const message = reactive({ text: '', kind: 'ok' })
 const tests = reactive({}) // "agent:scope:name" -> result
 const haveCmd = reactive({}) // 'node' / 'uvx' -> bool
 
-const installed = computed(() => ({
-  claude: !!props.agents.find((a) => a.id === 'claude' && a.available),
-  codex: !!props.agents.find((a) => a.id === 'codex' && a.available)
-}))
+const installed = computed(() =>
+  Object.fromEntries(ALL_AGENTS.map((id) => [id, !!props.agents.find((a) => a.id === id && a.available)]))
+)
+// The agents shown: installed here, or already holding servers (Claude Code
+// and Codex when nothing is detected, so the dialog is never empty).
+const AGENTS = computed(() => {
+  const shown = ALL_AGENTS.filter((a) => installed.value[a] || lists[a].length)
+  return shown.length ? shown : ['claude', 'codex']
+})
 
 function say(text, kind = 'ok') {
   message.text = text
@@ -48,7 +64,7 @@ function say(text, kind = 'ok') {
 // One row per server name, showing which agents have it.
 const rows = computed(() => {
   const map = new Map()
-  for (const agent of AGENTS) {
+  for (const agent of AGENTS.value) {
     for (const s of lists[agent]) {
       if (!map.has(s.name))
         map.set(s.name, { name: s.name, target: s.target, type: s.type, by: {} })
@@ -67,6 +83,11 @@ async function refresh() {
     lists.claude = (res && res.claude) || []
     lists.codex = (res && res.codex) || []
     lists.codexError = (res && res.codexError) || null
+    for (const [agent, r] of Object.entries((res && res.others) || {})) {
+      lists[agent] = (r && r.servers) || []
+      if (r && r.error) listErrors[agent] = r.error
+      else delete listErrors[agent]
+    }
   } catch (err) {
     lists.codexError = err.message
   } finally {
@@ -94,7 +115,7 @@ async function test(agent, s) {
 async function testAll() {
   const jobs = []
   for (const row of rows.value) {
-    for (const agent of AGENTS) if (row.by[agent]) jobs.push(test(agent, row.by[agent]))
+    for (const agent of AGENTS.value) if (row.by[agent]) jobs.push(test(agent, row.by[agent]))
   }
   await Promise.all(jobs)
 }
@@ -117,7 +138,9 @@ function testTitle(t) {
 }
 
 async function copyTo(row, to) {
-  const from = to === 'claude' ? 'codex' : 'claude'
+  // From an agent that has it (the first one shown).
+  const from = AGENTS.value.find((a) => a !== to && row.by[a])
+  if (!from) return
   const src = row.by[from]
   busy.value = `copy:${row.name}:${to}`
   try {
@@ -171,6 +194,8 @@ async function remove(agent, s) {
 function signIn(agent, name) {
   if (agent === 'codex') {
     emit('run', { label: `Sign in: ${name}`, command: `codex mcp login ${name}` })
+  } else if (agent !== 'claude') {
+    say(`Sign in to "${name}" from a ${AGENT_NAME[agent]} pane (its own MCP command), or set the server's API key.`)
   } else {
     say(
       `In a Claude Code pane, type /mcp, pick "${name}" and choose Authenticate. Your browser opens to sign in.`
@@ -183,7 +208,7 @@ const query = ref('')
 const category = ref('All')
 const openId = ref(null)
 const answers = reactive({})
-const targets = reactive({ claude: true, codex: true })
+const targets = reactive(Object.fromEntries(ALL_AGENTS.map((a) => [a, true])))
 const scope = ref('user')
 const formError = ref('')
 
@@ -197,7 +222,7 @@ const filtered = computed(() => {
 })
 
 function addedTo(id) {
-  return AGENTS.filter((a) => lists[a].some((s) => s.name === id))
+  return AGENTS.value.filter((a) => lists[a].some((s) => s.name === id))
 }
 
 function open(entry) {
@@ -207,8 +232,7 @@ function open(entry) {
   for (const input of entry.inputs || []) {
     answers[input.key] = input.kind === 'folder' ? props.cwd || '' : ''
   }
-  targets.claude = installed.value.claude && !addedTo(entry.id).includes('claude')
-  targets.codex = installed.value.codex && !addedTo(entry.id).includes('codex')
+  for (const a of ALL_AGENTS) targets[a] = installed.value[a] && !addedTo(entry.id).includes(a)
 }
 
 async function browse(key) {
@@ -221,9 +245,9 @@ async function browse(key) {
 
 async function addFromCatalog(entry) {
   formError.value = ''
-  const chosen = AGENTS.filter((a) => targets[a] && installed.value[a])
+  const chosen = AGENTS.value.filter((a) => targets[a] && installed.value[a])
   if (!chosen.length) {
-    formError.value = 'Choose Claude Code, Codex, or both.'
+    formError.value = 'Choose at least one agent.'
     return
   }
   for (const input of entry.inputs || []) {
@@ -276,14 +300,14 @@ const custom = reactive({
   headers: '',
   bearerEnvVar: ''
 })
-const customTargets = reactive({ claude: true, codex: true })
+const customTargets = reactive(Object.fromEntries(ALL_AGENTS.map((a) => [a, true])))
 const customError = ref('')
 
 async function addCustom() {
   customError.value = ''
-  const chosen = AGENTS.filter((a) => customTargets[a] && installed.value[a])
+  const chosen = AGENTS.value.filter((a) => customTargets[a] && installed.value[a])
   if (!chosen.length) {
-    customError.value = 'Choose Claude Code, Codex, or both.'
+    customError.value = 'Choose at least one agent.'
     return
   }
   busy.value = 'custom'
@@ -400,6 +424,7 @@ onMounted(async () => {
               >{{ rows.length }} {{ rows.length === 1 ? 'server' : 'servers' }}</template
             >
             <template v-if="lists.codexError"> · Codex: {{ lists.codexError }}</template>
+            <template v-for="(err, a) in listErrors" :key="a"> · {{ AGENT_NAME[a] }}: {{ err }}</template>
           </span>
           <button class="exit-btn" :disabled="!rows.length" @click="testAll">Test all</button>
         </div>
