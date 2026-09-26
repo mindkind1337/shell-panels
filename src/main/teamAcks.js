@@ -9,6 +9,13 @@ import { removeNotice } from './teamNotices'
 
 const ID_RE = /^(?!\.)(?!.*\.\.)[A-Za-z0-9._-]{1,100}$/
 
+// A processed ack file is kept a minute before it is deleted: the team tools
+// read state.json, then check the ack files; deleting the file right after
+// marking the message delivered could make them show it a second time in
+// between.
+const ACK_KEPT_MS = 60000
+const processedAt = new Map() // ack file -> when it was processed
+
 export function takeTeamAcks({ dir, teamId } = {}) {
   if (typeof dir !== 'string' || !isAbsolute(dir) || typeof teamId !== 'string' || !ID_RE.test(teamId))
     return { ok: false, error: 'Invalid team channel location.' }
@@ -18,6 +25,17 @@ export function takeTeamAcks({ dir, teamId } = {}) {
   for (const name of fs.readdirSync(folder)) {
     if (!name.endsWith('.json')) continue
     const file = join(folder, name)
+    const doneAt = processedAt.get(file)
+    if (doneAt) {
+      if (Date.now() - doneAt < ACK_KEPT_MS) continue
+      try {
+        fs.rmSync(file, { force: true })
+      } catch {
+        continue // retried next round
+      }
+      processedAt.delete(file)
+      continue
+    }
     let data = null
     try {
       data = JSON.parse(fs.readFileSync(file, 'utf8'))
@@ -31,13 +49,10 @@ export function takeTeamAcks({ dir, teamId } = {}) {
       : data && typeof data.id === 'string' && typeof data.toId === 'string'
         ? ackTeamDelivery({ dir, teamId, id: data.id, toId: data.toId })
         : { ok: false }
-    // Done, or not a delivery any more (unknown / already confirmed): gone.
-    if (res.ok || /Unknown delivery/.test(res.error || '') || !data) {
-      try {
-        fs.rmSync(file, { force: true })
-      } catch {
-        // retried next round
-      }
+    // Done, or not a delivery any more (unknown / already confirmed; a notice
+    // already removed): deleted a minute from now.
+    if (res.ok || notice || /Unknown delivery/.test(res.error || '') || !data) {
+      processedAt.set(file, Date.now())
       if (res.ok) count++
     }
   }

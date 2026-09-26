@@ -602,3 +602,32 @@ describe('the team channel does not grow forever', () => {
     expect(fs.existsSync(root('team-new'))).toBe(true)
   })
 })
+
+describe('a message read once is never shown again', () => {
+  it('keeps the read note a minute after Tessel took it in', () => {
+    const dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-ack-'))
+    try {
+      const A = { id: 'pane-1-aaaaaa', num: 1, title: 'A' }
+      const B = { id: 'pane-2-bbbbbb', num: 2, title: 'B' }
+      ensureTeamChannel({ dir, teamId: 'team-1', members: [A, B] })
+      writeCurrentTeams({ dir, panes: { [A.id]: { team: 'team-1', num: 1 }, [B.id]: { team: 'team-1', num: 2 } } })
+      process.env.TESSEL_PROJECT_DIR = dir
+      process.env.TESSEL_PANE_ID = A.id
+      mcp.send(mcp.locate(), '#2', 'hello once')
+      pollTeamChannel({ dir, teamId: 'team-1' })
+      process.env.TESSEL_PANE_ID = B.id
+      // The agent read it; its state copy is from before Tessel takes the note in.
+      const before = mcp.locate()
+      expect(mcp.readInbox(before)).toContain('hello once')
+      takeTeamAcks({ dir, teamId: 'team-1' })
+      const acks = join(dir, '.tessel', 'team-channel', 'team-1', 'acks')
+      expect(fs.readdirSync(acks).length).toBe(1) // kept for now
+      expect(mcp.readInbox(before)).toBe('') // stale state + note still there: not shown again
+      expect(mcp.readInbox(mcp.locate())).toBe('')
+    } finally {
+      delete process.env.TESSEL_PANE_ID
+      delete process.env.TESSEL_PROJECT_DIR
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
