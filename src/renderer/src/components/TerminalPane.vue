@@ -803,6 +803,22 @@ onMounted(() => {
       return false
     }
     if (isAppShortcut(e)) return false
+    // Shift+Enter in an agent: a new line in the message, not sending it. The
+    // terminal sends the same Enter for both, so each agent gets the key it
+    // reads as "new line": Alt+Enter for Claude Code, Ctrl+J for the others.
+    if (
+      e.type === 'keydown' &&
+      e.key === 'Enter' &&
+      e.shiftKey &&
+      !e.ctrlKey &&
+      !e.altKey &&
+      !e.metaKey &&
+      isAgent.value
+    ) {
+      e.preventDefault()
+      ctx.routeInput(props.node.id, props.node.agentId === 'claude' ? '\x1b\r' : '\n')
+      return false
+    }
     // xterm leaves a plain Space to the browser's keypress/input events, but
     // Windows sometimes stops delivering the character (seen after using
     // dictation): the keydown arrives and nothing follows, so spaces vanish
