@@ -69,9 +69,7 @@ describe('MCP servers in agents settings files', () => {
       env: { TESSEL_PANE_ID: '$TESSEL_PANE_ID', TESSEL_PROJECT_DIR: '$TESSEL_PROJECT_DIR' },
       trust: true
     })
-    expect(teamToolsEntry('opencode', 'C:/t/s.cjs').environment).toEqual({
-      TESSEL_PANE_ID: '{env:TESSEL_PANE_ID}',
-      TESSEL_PROJECT_DIR: '{env:TESSEL_PROJECT_DIR}'
-    })
+    // No path through {env:}: OpenCode inserts it raw, and a backslash breaks its JSON.
+    expect(teamToolsEntry('opencode', 'C:/t/s.cjs').environment).toEqual({ TESSEL_PANE_ID: '{env:TESSEL_PANE_ID}' })
   })
 })

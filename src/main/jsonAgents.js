@@ -174,11 +174,11 @@ export function removeJsonAgentServer(agent, name, home) {
 // the pane's environment (each CLI's own way of passing it).
 export function teamToolsEntry(agent, scriptPath) {
   const stdio = { transport: 'stdio', command: 'node', args: [scriptPath] }
-  if (agent === 'opencode')
-    return configToEntry(agent, {
-      ...stdio,
-      env: { TESSEL_PANE_ID: '{env:TESSEL_PANE_ID}', TESSEL_PROJECT_DIR: '{env:TESSEL_PROJECT_DIR}' }
-    })
+  // OpenCode puts {env:…} values into the file as raw text before reading it
+  // as JSON: a Windows path (backslashes) would break the whole file. Only
+  // the pane id (no backslash) goes that way; the project folder is found
+  // from the folder OpenCode runs in.
+  if (agent === 'opencode') return configToEntry(agent, { ...stdio, env: { TESSEL_PANE_ID: '{env:TESSEL_PANE_ID}' } })
   if (agent === 'copilot') return configToEntry(agent, stdio)
   // Gemini CLI / Qwen Code: variables expanded from the environment; trusted,
   // so its tools run without asking each time (like Codex's "approve").
