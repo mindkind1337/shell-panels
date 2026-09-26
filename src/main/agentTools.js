@@ -75,8 +75,11 @@ export function parseKeyValueLines(text, sep = '=') {
 }
 
 // Quote a value as a PowerShell single-quoted literal.
+// Inside '…' PowerShell ends the string at ' and also at the typographic
+// quotes ‘ ’ ‚ ‛: each is doubled, so a value can never close the string and
+// run a command.
 export function psQuote(value) {
-  return `'${String(value).replace(/'/g, "''")}'`
+  return `'${String(value).replace(/['\u2018\u2019\u201A\u201B]/g, (q) => q + q)}'`
 }
 
 // Claude Code keeps servers in ~/.claude.json: user scope at the top level,

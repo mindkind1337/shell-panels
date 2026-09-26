@@ -9,6 +9,7 @@
 // check too, against dev-app-update.yml (e.g. a local test feed).
 import { app } from 'electron'
 import { autoUpdater } from 'electron-updater'
+import fs from 'fs'
 
 const FIRST_CHECK_MS = 15 * 1000
 const CHECK_EVERY_MS = 4 * 60 * 60 * 1000
@@ -32,7 +33,7 @@ export function htmlToText(html) {
     .trim()
 }
 
-export function createUpdater({ log, send, beforeInstall }) {
+export function createUpdater({ log, send, beforeInstall, onInstallFailed }) {
   const enabled = app.isPackaged || process.env.TESSEL_UPDATE_TEST === '1'
   let status = { state: enabled ? 'idle' : 'disabled', current: app.getVersion() }
 
@@ -106,6 +107,16 @@ export function createUpdater({ log, send, beforeInstall }) {
   let installing = false
   async function install() {
     if (status.state !== 'ready' || installing) return false
+    // The downloaded installer must still be there (an antivirus can remove
+    // it) BEFORE anything is stopped: otherwise the terminals would be closed
+    // for an update that cannot run.
+    const file = autoUpdater.installerPath
+    if (!file || !fs.existsSync(file)) {
+      log.warn('update', `the downloaded update is missing (${file || 'no file'}): downloading it again`)
+      set({ state: 'error', message: 'The downloaded update was removed (an antivirus?). Tessel downloads it again.' })
+      check()
+      return false
+    }
     installing = true
     log.info('update', `installing v${status.version} and restarting`)
     try {
@@ -113,8 +124,22 @@ export function createUpdater({ log, send, beforeInstall }) {
     } catch (err) {
       log.warn('update', `preparing the update: ${err.message}`)
     }
-    // Silent install, then start the app again.
-    setImmediate(() => autoUpdater.quitAndInstall(true, true))
+    // Silent install, then start the app again. If the app is still running
+    // a while later, the install did not start: say so and get back to normal
+    // (a new try is possible).
+    setImmediate(() => {
+      try {
+        autoUpdater.quitAndInstall(true, true)
+      } catch (err) {
+        log.warn('update', `install failed: ${err.message}`)
+      }
+    })
+    setTimeout(() => {
+      installing = false
+      log.warn('update', 'the update did not start')
+      set({ state: 'error', message: 'The update could not start. Try again, or download it from the Releases page.' })
+      if (onInstallFailed) onInstallFailed()
+    }, 20000).unref()
     return true
   }
 

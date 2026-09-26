@@ -1289,6 +1289,17 @@ const updater = createUpdater({
     fs.writeFileSync(updateNoteFile(), JSON.stringify({ from: app.getVersion(), to: version }))
     await shutdownTerminals()
     shutdownDone = true
+  },
+  // The installer never started: back to a normal running app (the
+  // terminals start again as panes restart or reattach).
+  onInstallFailed: () => {
+    shutdownDone = false
+    quitting = false
+    try {
+      fs.rmSync(updateNoteFile(), { force: true })
+    } catch {
+      // no note
+    }
   }
 })
 

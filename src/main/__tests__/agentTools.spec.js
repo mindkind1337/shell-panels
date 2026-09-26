@@ -264,3 +264,11 @@ describe('npm launchers where PowerShell scripts are blocked', () => {
     }
   })
 })
+
+describe('psQuote and the typographic quotes', () => {
+  it('doubles every quote PowerShell ends a string at', () => {
+    expect(psQuote("it's")).toBe("'it''s'")
+    expect(psQuote('x\u2019; calc; \u2019')).toBe("'x\u2019\u2019; calc; \u2019\u2019'")
+    expect(psQuote('\u2018a\u201Ab\u201B')).toBe("'\u2018\u2018a\u201A\u201Ab\u201B\u201B'")
+  })
+})
