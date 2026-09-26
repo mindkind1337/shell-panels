@@ -75,7 +75,8 @@ const api = {
     requests: (args) => ipcRenderer.invoke('team:requests', args),
     requestsDone: (args) => ipcRenderer.invoke('team:requests-done', args),
     boardPanes: (args) => ipcRenderer.invoke('team:board-panes', args),
-    messageStatus: (args) => ipcRenderer.invoke('team:message-status', args)
+    messageStatus: (args) => ipcRenderer.invoke('team:message-status', args),
+    toolsAlive: (args) => ipcRenderer.invoke('team:tools-alive', args)
   },
   review: {
     info: (args) => ipcRenderer.invoke('review:info', args),

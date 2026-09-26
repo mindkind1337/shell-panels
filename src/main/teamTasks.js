@@ -165,6 +165,24 @@ export function finishTeamRequests({ dir, teamId, board, files } = {}) {
   return { ok: true, removed }
 }
 
+// Which panes have their team tools running (the tools say so every 30 s,
+// see teamMcp/server.cjs): -> { ok, alive: { paneId: { at, version } | null } }
+export function toolsAlive({ dir, ids } = {}) {
+  if (typeof dir !== 'string' || !isAbsolute(dir) || !Array.isArray(ids)) return { ok: false, error: 'Invalid location.' }
+  const alive = {}
+  for (const id of ids.slice(0, 200)) {
+    if (typeof id !== 'string' || !ID_RE.test(id)) continue
+    let data = null
+    try {
+      data = JSON.parse(fs.readFileSync(join(resolve(dir), '.tessel', 'agents', `${id}.json`), 'utf8'))
+    } catch {
+      data = null
+    }
+    alive[id] = data && typeof data.at === 'number' && Date.now() - data.at < 90000 ? { at: data.at, version: data.version || null } : null
+  }
+  return { ok: true, alive }
+}
+
 // The status of team messages by id, read from the channel's state:
 // { <id>: 'pending' | 'inflight' | 'uncertain' | 'delivered' | 'gone' }.
 // 'gone': no longer kept, which only happens to delivered (read) messages.

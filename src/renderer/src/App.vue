@@ -3394,6 +3394,9 @@ async function pollTeams() {
       await deliverChannel(team, members, round)
       if (roundGone(round)) return
     }
+    teamStepIs('team tools check')
+    await checkTeamTools(round)
+    if (roundGone(round)) return
     teamStepIs('workspace boards')
     await syncSoloBoards(round)
     if (roundGone(round)) return
@@ -3512,6 +3515,64 @@ async function ackChannel(dir, teamId, d, key, tries = 0) {
 }
 
 let teamToolsReady = false
+// Team members whose team tools are not connected: the tools say they run
+// every 30 s (teamMcp/server.cjs, .tessel/agents/<pane>.json). An agent of a
+// team with no such sign for a minute after it started gets a warning on its
+// row and a message once; both go when the tools are back.
+const MCP_AGENT_IDS = ['claude', 'codex', 'gemini', 'qwen', 'copilot', 'opencode']
+const toolsDown = reactive({}) // paneId -> true
+const toolsWarned = new Set()
+let toolsCheckAt = 0
+async function checkTeamTools(round) {
+  if (!window.shellApi.team || !window.shellApi.team.toolsAlive || !teamToolsReady) return
+  if (Date.now() < toolsCheckAt) return
+  toolsCheckAt = Date.now() + 20000
+  const inTeam = new Set()
+  for (const team of teams.value) {
+    const members = teamMembers(team.id).filter((l) => l.kind === 'agent' && MCP_AGENT_IDS.includes(l.agentId))
+    if (!members.length) continue
+    // Where each tool writes: the project folder it was given (its
+    // workspace's, or the folder it started in).
+    const byDir = {}
+    for (const m of members) {
+      inTeam.add(m.id)
+      for (const d of new Set([channelDir(team), wsOfLeaf(m.id)?.cwd, m.startDir].filter(Boolean))) (byDir[d] = byDir[d] || []).push(m.id)
+    }
+    const alive = new Set()
+    for (const [dir, ids] of Object.entries(byDir)) {
+      const res = await window.shellApi.team.toolsAlive({ dir, ids })
+      if (roundGone(round)) return
+      for (const [id, a] of Object.entries((res && res.ok && res.alive) || {})) if (a) alive.add(id)
+    }
+    for (const m of members) {
+      // Started with older tools (before they said they run): cannot tell;
+      // it is restarted with the new ones anyway.
+      if (m.teamTools && m.toolsVersion !== teamToolsVersion) {
+        delete toolsDown[m.id]
+        continue
+      }
+      const young = Date.now() - (m.restartedAt || m.launchedAt || 0) < 60000
+      if (alive.has(m.id)) {
+        delete toolsDown[m.id]
+        toolsWarned.delete(m.id)
+      } else if (!young && !toolsDown[m.id]) {
+        toolsDown[m.id] = true
+        if (!toolsWarned.has(m.id)) {
+          toolsWarned.add(m.id)
+          showToast(`${paneLabel(m)}: its team tools (tessel-team) are not connected, so it cannot read or send team messages. Restart it (right-click its pane, Restart).`, {
+            kind: 'attention',
+            timeout: 15000,
+            action: { label: 'Restart', run: () => restartLeaf(m.id) }
+          })
+          if (window.shellApi.log) window.shellApi.log('info', `team tools: ${paneLabel(m)} (${m.id}) has no connected tessel-team server`)
+        }
+      }
+    }
+  }
+  // Not in a team any more: no warning.
+  for (const id of Object.keys(toolsDown)) if (!inTeam.has(id)) delete toolsDown[id]
+}
+
 // Agents started by hand in a shell pane (`claude` typed in PowerShell):
 // Tessel looks at what runs under the pane's shell after Enter is pressed
 // there (for a minute), and every few seconds while such an agent runs. The
@@ -4603,6 +4664,7 @@ const sessionItems = computed(() => {
       held: !!pendingMessages[leaf.id],
       typingHold: !!pendingMessages[leaf.id] && !!userDraft[leaf.id],
       teamUnread: teamUnread[leaf.id] || 0,
+      toolsDown: !!toolsDown[leaf.id],
       team: leaf.team || null,
       lead: !!(leaf.team && teamById(leaf.team)?.leadId === leaf.id),
       task: taskOfPane(leaf.id)?.title || null,

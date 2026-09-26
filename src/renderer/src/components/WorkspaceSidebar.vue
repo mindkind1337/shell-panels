@@ -632,6 +632,11 @@ defineExpose({
                 class="ws-team-unread"
                 :title="`${r.s.teamUnread} team message${r.s.teamUnread > 1 ? 's' : ''} this agent has not read yet (it reads them with its team tools)`"
                 >✉ {{ r.s.teamUnread }}</span
+              ><span
+                v-if="r.s.toolsDown && !picking"
+                class="ws-tools-down"
+                title="Its team tools (tessel-team) are not connected: it cannot read or send team messages. Restart it (right-click its pane, Restart)."
+                >⚠ tools</span
               ></span
             >
             <span class="ws-session-state" :class="r.s.track ? 'track-' + r.s.track.level : ''" :title="r.s.track ? r.s.track.reason : ''">{{

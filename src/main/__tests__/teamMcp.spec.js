@@ -7,7 +7,7 @@ import { createRequire } from 'module'
 import { ensureTeamChannel, pollTeamChannel } from '../teamChannel'
 import { takeTeamAcks } from '../teamAcks'
 import { writeCurrentTeams, retireOldTeams, addNotices } from '../teamNotices'
-import { publishTeamTasks, takeTeamRequests, finishTeamRequests, messageStatuses, writeBoardPanes } from '../teamTasks'
+import { publishTeamTasks, takeTeamRequests, finishTeamRequests, messageStatuses, writeBoardPanes, toolsAlive } from '../teamTasks'
 
 const require = createRequire(import.meta.url)
 const SERVER = join(__dirname, '..', 'teamMcp', 'server.cjs')
@@ -655,4 +655,27 @@ describe('a damaged team channel state', () => {
       fs.rmSync(dir, { recursive: true, force: true })
     }
   })
+})
+
+describe('the team tools say they are running', () => {
+  it('writes its proof of life for its pane while it runs, and removes it when it ends', async () => {
+    const dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-alive-'))
+    try {
+      const env = { ...process.env, TESSEL_PANE_ID: 'pane-7-alive1', TESSEL_PROJECT_DIR: dir }
+      const p = spawn(process.execPath, [SERVER], { env, stdio: ['pipe', 'pipe', 'pipe'] })
+      const file = join(dir, '.tessel', 'agents', 'pane-7-alive1.json')
+      for (let i = 0; i < 50 && !fs.existsSync(file); i++) await new Promise((r) => setTimeout(r, 100))
+      expect(toolsAlive({ dir, ids: ['pane-7-alive1', 'pane-8-other0'] }).alive).toEqual({
+        'pane-7-alive1': { at: expect.any(Number), version: expect.any(String) },
+        'pane-8-other0': null
+      })
+      const ended = new Promise((r) => p.on('exit', r))
+      p.stdin.end() // the agent closed it
+      await ended
+      expect(fs.existsSync(file)).toBe(false)
+      expect(toolsAlive({ dir, ids: ['pane-7-alive1'] }).alive['pane-7-alive1']).toBe(null)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  }, 20000)
 })

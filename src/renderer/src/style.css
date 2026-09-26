@@ -5359,6 +5359,17 @@ button.act-stat:hover,
   font-size: 11.5px;
 }
 
+/* A team member whose team tools are not connected. */
+.ws-tools-down {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warn) 20%, transparent);
+  color: var(--warn);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
 /* Unread team messages: a small count next to the agent's name. */
 .ws-team-unread {
   margin-left: 6px;
