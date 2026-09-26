@@ -94,20 +94,13 @@ chew through it.
 
 - **Toggle** the panel with **`Ctrl+Shift+K`** (it slides in beside the panes).
 - **Add** a task by typing into the new-task box and pressing **Enter**.
-- **Move** tasks across columns as they progress from queued to in-flight to
-  done.
-- **Persisted** — tasks are saved with the workspace (the same mechanism that
-  restores your split layout) and restored on the next launch.
-
-A puppeteer-core smoke test, `test-taskboard.cjs`, covers the core flow
-end-to-end: it boots the renderer, toggles the board with `Ctrl+Shift+K`, adds
-a task, and reloads to confirm the task persisted. Run it against the dev
-server:
-
-```sh
-npm run dev          # in one terminal
-node test-taskboard.cjs   # in another
-```
+- **Move** a task by dragging it to another column; rename it with the pencil.
+  Each card shows when the work started and when it was finished.
+- **Resize** the board by dragging its left edge.
+- **Agents use it too**: through Tessel's team tools they add and move their
+  own cards, so you see who does what.
+- **Persisted** — tasks are saved with the workspace and restored on the next
+  launch.
 
 ## Build from source
 
@@ -115,11 +108,16 @@ For developing Tessel. Requires Node.js 22+ on Windows.
 
 ```sh
 npm install
-npm run dev      # the development version (hot reload)
+npm run dev          # the development version (hot reload)
+npm run dev:hidden   # the same, in the background with no console window
+npm test             # the unit tests
 ```
 
 If Electron's download was skipped during `npm install`, `npm run dev`
 fetches it by itself before starting.
+
+`test-taskboard.cjs` is an end-to-end check of the task board for developers:
+run it in a second terminal while `npm run dev` is running.
 
 To build your own installer instead of downloading it:
 
