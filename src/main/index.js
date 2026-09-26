@@ -27,6 +27,7 @@ import { takeTeamAcks } from './teamAcks'
 import { writeJsonSafe, readJsonSafe } from './safeJson'
 import { addNotices, writeCurrentTeams, retireOldTeams } from './teamNotices'
 import { JSON_AGENTS, setJsonAgentServer, teamToolsEntry } from './jsonAgents'
+import { detectAgents } from './agentDetect'
 import { publishTeamTasks, takeTeamRequests, finishTeamRequests, messageStatuses, writeBoardPanes } from './teamTasks'
 import {
   writeServerScript,
@@ -918,6 +919,8 @@ function codexSupportsNoDaemon() {
   return codexNoDaemon
 }
 ipcMain.handle('agents:codex-no-daemon', () => codexSupportsNoDaemon())
+// Which agent CLI runs inside each shell pane (started by hand in it).
+ipcMain.handle('agents:detect', safe(detectAgents))
 // Which of these commands are on PATH (fresh PATH, so just-installed tools
 // show up). Returns { bin: true|false }.
 ipcMain.handle('tools:check', (_evt, bins) => {

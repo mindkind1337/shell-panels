@@ -173,6 +173,7 @@ const draftUnknown = {}
 const USER_QUIET_MS = 8000
 function noteUserInput(id, data) {
   const s = String(data || '')
+  if (s.includes('\r')) shellEnterAt[id] = Date.now()
   // Terminal replies and arrow keys (ESC [ ..., ESC O ...) are not typing;
   // a paste the user makes (ESC [200~ ... ESC [201~) is.
   const pasted = s.startsWith('\x1b[200~')
@@ -568,10 +569,12 @@ function serializeNode(node) {
       type: 'leaf',
       id: node.id,
       shellId: node.shellId,
-      title: node.title,
+      title: node.detected ? node.shellTitle || node.title : node.title,
       broadcast: node.broadcast !== false,
-      kind: node.kind || 'shell',
-      agentId: node.agentId || null,
+      // An agent started by hand in a shell is saved as that shell (it is
+      // detected again after a restart if it still runs there).
+      kind: node.detected ? 'shell' : node.kind || 'shell',
+      agentId: node.detected ? null : node.agentId || null,
       agentCommand: node.agentCommand || null,
       accent: node.accent || null,
       worktree: node.worktree || null,
@@ -3509,6 +3512,69 @@ async function ackChannel(dir, teamId, d, key, tries = 0) {
 }
 
 let teamToolsReady = false
+// Agents started by hand in a shell pane (`claude` typed in PowerShell):
+// Tessel looks at what runs under the pane's shell after Enter is pressed
+// there (for a minute), and every few seconds while such an agent runs. The
+// pane then works as an agent pane (status, teams, board) and goes back to
+// being a shell when the agent quits. Checked once for every shell pane at
+// startup (an agent may still run from before).
+const shellEnterAt = {} // paneId -> last Enter pressed there
+let detectBusy = false
+let detectedAtStart = false
+async function detectShellAgents() {
+  if (!teamsReady || detectBusy || !window.shellApi.detectAgents) return
+  const now = Date.now()
+  const shells = {}
+  const watched = {}
+  forEachWsLeaf((l) => {
+    if (!l.pid) return
+    const watch = l.detected || (l.kind !== 'agent' && (!detectedAtStart || now - (shellEnterAt[l.id] || 0) < 60000))
+    if (watch) {
+      shells[l.id] = l.pid
+      watched[l.id] = l
+    }
+  })
+  detectedAtStart = true
+  if (!Object.keys(shells).length) return
+  detectBusy = true
+  try {
+    const res = await window.shellApi.detectAgents({ shells })
+    if (!res || !res.ok) return
+    for (const [id, agentId] of Object.entries(res.agents || {})) {
+      const l = findLeaf(id)
+      if (!l || l !== watched[id]) continue // closed or replaced meanwhile
+      if (agentId && !l.detected && l.kind !== 'agent') becomeAgent(l, agentId)
+      else if (agentId && l.detected && l.agentId !== agentId) becomeAgent(l, agentId)
+      else if (!agentId && l.detected) becomeShell(l)
+    }
+  } finally {
+    detectBusy = false
+  }
+}
+function becomeAgent(leaf, agentId) {
+  const preset = agents.value.find((a) => a.id === agentId)
+  if (!leaf.detected) leaf.shellTitle = leaf.title
+  leaf.detected = true
+  leaf.kind = 'agent'
+  leaf.agentId = agentId
+  leaf.accent = (preset && preset.accent) || null
+  leaf.title = (preset && preset.name) || agentId
+  leaf.teamTools = teamToolsReady
+  leaf.toolsVersion = teamToolsReady ? teamToolsVersion : null
+  if (window.shellApi.log) window.shellApi.log('info', `detected ${leaf.title} started by hand in pane ${leaf.id}`)
+}
+function becomeShell(leaf) {
+  leaf.kind = 'shell'
+  leaf.agentId = null
+  leaf.accent = null
+  leaf.title = leaf.shellTitle || leaf.title
+  leaf.detected = false
+  delete leaf.shellTitle
+  clearAgentStatus(leaf.id)
+}
+const detectTimer = setInterval(detectShellAgents, 4000)
+onBeforeUnmount(() => clearInterval(detectTimer))
+
 // The team tools' version now (server.cjs VERSION), once they are set up.
 let teamToolsVersion = null
 // Started with the team tools as they are now (an older version: restarted).

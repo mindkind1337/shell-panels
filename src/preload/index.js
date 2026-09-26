@@ -64,6 +64,8 @@ const api = {
   installTeamTools: () => ipcRenderer.invoke('team:install'),
   // Whether the installed Codex can run without its shared daemon.
   codexNoDaemon: () => ipcRenderer.invoke('agents:codex-no-daemon'),
+  // { shells: { paneId: shellPid } } -> { ok, agents: { paneId: agentId | null } }
+  detectAgents: (args) => ipcRenderer.invoke('agents:detect', args),
   // Background team information (never typed into terminals).
   team: {
     notice: (args) => ipcRenderer.invoke('team:notice', args),
