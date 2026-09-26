@@ -63,6 +63,9 @@ function sleepSync(ms) {
 // show it still runs. It retires only teams it made (a team of unknown
 // origin only when no other window runs).
 const OWNER_GONE_MS = 5 * 60 * 1000
+// Another window's teams are never retired while its file is younger than
+// this (a window can stop writing for a while: paused in a debugger, asleep).
+const OWNER_TEAMS_KEPT_MS = 6 * 60 * 60 * 1000
 const OWNER_TOUCH_MS = 60 * 1000
 const OWNER_RE = /^[A-Za-z0-9_-]{1,40}$/
 
@@ -70,8 +73,9 @@ function ownerFile(b, owner) {
   return join(b, `current.${owner}.json`)
 }
 
-// The files of the windows seen in the last 5 minutes (not `except`).
-function liveOwners(b, except = null, now = Date.now()) {
+// The files of the windows seen in the last 5 minutes (or `maxAge`), not
+// `except`.
+function liveOwners(b, except = null, now = Date.now(), maxAge = OWNER_GONE_MS) {
   const out = []
   let names = []
   try {
@@ -83,7 +87,7 @@ function liveOwners(b, except = null, now = Date.now()) {
     const m = /^current\.([A-Za-z0-9_-]{1,40})\.json$/.exec(n)
     if (!m || m[1] === except) continue
     const data = readJson(join(b, n))
-    if (data && typeof data.at === 'number' && now - data.at <= OWNER_GONE_MS && data.panes) out.push(data)
+    if (data && typeof data.at === 'number' && now - data.at <= maxAge && data.panes) out.push(data)
   }
   return out
 }
@@ -161,7 +165,7 @@ export function retireOldTeams({ dir, liveTeamIds, owner } = {}) {
   const live = new Set(liveTeamIds)
   const others = owner ? liveOwners(b, owner) : []
   const theirs = new Set()
-  for (const o of others) {
+  for (const o of owner ? liveOwners(b, owner, Date.now(), OWNER_TEAMS_KEPT_MS) : []) {
     for (const p of Object.values(o.panes)) if (p) theirs.add(p.team)
     for (const t of Array.isArray(o.teams) ? o.teams : []) theirs.add(t)
   }

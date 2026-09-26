@@ -13,6 +13,7 @@ const ID_RE = /^(?!\.)(?!.*\.\.)[A-Za-z0-9._-]{1,100}$/
 export const TASK_COLUMNS = ['todo', 'doing', 'review', 'done']
 const MAX_TITLE = 200
 const MAX_REQUESTS = 50 // per round
+const UNREADABLE_AFTER_MS = 5000
 
 function teamRoot(dir, teamId) {
   if (typeof dir !== 'string' || !isAbsolute(dir) || typeof teamId !== 'string' || !ID_RE.test(teamId)) return null
@@ -80,9 +81,18 @@ export function takeTeamRequests({ dir, teamId } = {}) {
     const file = join(folder, f.name)
     let data = null
     try {
-      data = JSON.parse(fs.readFileSync(file, 'utf8'))
+      data = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''))
     } catch {
-      continue // being written: next round
+      // Being written: next round. Still unreadable after 5 s: damaged, so
+      // refused and removed (it would block the requests behind it).
+      if (Date.now() - f.at < UNREADABLE_AFTER_MS) continue
+      try {
+        fs.rmSync(file, { force: true })
+      } catch {
+        continue
+      }
+      refused.push({ fromId: f.fromId, error: 'the request file could not be read' })
+      continue
     }
     const req = parseRequest(data)
     if (!req.error) {

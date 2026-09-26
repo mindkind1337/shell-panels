@@ -479,3 +479,43 @@ describe('an agent whose team was ungrouped', () => {
     expect(mcp.locate().error).toMatch(/not in a Tessel team right now/)
   })
 })
+
+describe('robustness of the team files', () => {
+  let dir
+  beforeEach(() => {
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-robust-'))
+    ensureTeamChannel({ dir, teamId: 'team-1', members: [{ id: 'pane-1-aaaaaa', num: 1, title: 'A' }] })
+  })
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+  const requests = () => join(dir, '.tessel', 'team-channel', 'team-1', 'requests')
+
+  it('a board request with a BOM is read; a damaged one is refused and removed after 5 s', () => {
+    fs.mkdirSync(requests(), { recursive: true })
+    fs.writeFileSync(join(requests(), 'pane-1-aaaaaa__bom.json'), '﻿' + JSON.stringify({ action: 'add', title: 'With BOM' }))
+    const bad = join(requests(), 'pane-1-aaaaaa__bad.json')
+    fs.writeFileSync(bad, '{cut')
+    let res = takeTeamRequests({ dir, teamId: 'team-1' })
+    expect(res.requests.map((r) => r.title)).toEqual(['With BOM'])
+    expect(fs.existsSync(bad)).toBe(true) // maybe still being written
+    const old = new Date(Date.now() - 10000)
+    fs.utimesSync(bad, old, old)
+    res = takeTeamRequests({ dir, teamId: 'team-1' })
+    expect(res.refused).toEqual([{ fromId: 'pane-1-aaaaaa', error: 'the request file could not be read' }])
+    expect(fs.existsSync(bad)).toBe(false)
+  })
+
+  it('another window silent for an hour keeps its teams (not retired)', () => {
+    writeCurrentTeams({ dir, owner: 'app', panes: { 'pane-1-aaaaaa': { team: 'team-1', num: 1 } } })
+    const f = join(dir, '.tessel', 'team-channel', 'current.app.json')
+    const d = JSON.parse(fs.readFileSync(f, 'utf8'))
+    d.at -= 60 * 60 * 1000
+    fs.writeFileSync(f, JSON.stringify(d))
+    writeCurrentTeams({ dir, owner: 'dev', panes: {} })
+    expect(retireOldTeams({ dir, liveTeamIds: [], owner: 'dev' }).retired).toEqual([])
+    d.at -= 7 * 60 * 60 * 1000 // gone for good
+    fs.writeFileSync(f, JSON.stringify(d))
+    expect(retireOldTeams({ dir, liveTeamIds: [], owner: 'dev' }).retired).toEqual(['team-1'])
+  })
+})

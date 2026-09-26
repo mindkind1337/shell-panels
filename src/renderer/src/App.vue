@@ -3315,8 +3315,10 @@ async function pollTeams() {
           continue
         }
         teamStepIs('inbox', team)
+        // Taken = removed from disk: from here on they are carried out and
+        // answered even if the watchdog replaces this round (nothing else
+        // would ever do them).
         const res = await window.shellApi.lead.take({ dir, token })
-        if (roundGone(round)) return
         // Its folder is gone (deleted by hand?): make it again next round.
         if (res && res.ok && res.missing) {
           delete team.inboxes[m.id]
@@ -3333,7 +3335,6 @@ async function pollTeams() {
           else if (req.action === 'message') answers.push(runMemberMessage(team, leaf, req))
           else if (!isLead) answers.push(`${item.file}: only the team lead can use "${req.action}". Send a message instead.`)
           else answers.push(await runLeadRequest(team, leaf, req))
-          if (roundGone(round)) return
         }
         const text = answers.filter(Boolean)
         if (!text.length) continue
@@ -3342,6 +3343,7 @@ async function pollTeams() {
           scope: 'lead',
           teamId: team.id
         })
+        if (roundGone(round)) return
       }
       teamStepIs('channel set-up', team)
       await syncChannel(team)
@@ -3545,6 +3547,9 @@ async function restartInPlace(leafId, opts = {}) {
     fresh.teamTools = true
     fresh.toolsVersion = teamToolsVersion
   }
+  // A new terminal: its input line is empty (a draft typed in the old one is
+  // gone), so reminders and restarts are not held back by it.
+  setDraft(leafId, false)
   ws.tree = replaceNode(ws.tree, leafId, () => fresh)
   return true
 }
@@ -4756,10 +4761,27 @@ onMounted(async () => {
 
 let unsubFocusPane = null
 
+// Closing or reloading the window: what is waiting to be saved (layout,
+// board, activity; saved a moment after each change) is written now, so the
+// last change before closing is not lost.
+function flushSaves() {
+  saveLayoutNow()
+  if (taskSaveTimer) {
+    clearTimeout(taskSaveTimer)
+    taskSaveTimer = null
+    window.shellApi.taskBoard.save(boardToSave())
+  }
+  saveActivityNow()
+}
+window.addEventListener('beforeunload', flushSaves)
+window.addEventListener('pagehide', flushSaves)
+
 onBeforeUnmount(() => {
   if (unsubFocusPane) unsubFocusPane()
   if (unsubUpdate) unsubUpdate()
-  if (taskSaveTimer) clearTimeout(taskSaveTimer)
+  flushSaves()
+  window.removeEventListener('beforeunload', flushSaves)
+  window.removeEventListener('pagehide', flushSaves)
   window.removeEventListener('keydown', onKey)
   window.removeEventListener('pointerdown', onDocPointerDown, true)
 })
