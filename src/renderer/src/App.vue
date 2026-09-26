@@ -2909,6 +2909,34 @@ async function removeTaskCopy(task, force) {
   return window.shellApi.review.remove({ root: wt.root, path: wt.path, branch: wt.branch, target: wt.baseBranch || 'main', force })
 }
 
+// ✕ on a card: asked first. A task working in its own copy of the project
+// also has that copy and branch deleted (with its agent closed), so nothing
+// is left behind with no way to merge it; the dialog says what is lost.
+async function deleteTask(taskId) {
+  const task = boardTasks.find((t) => t.id === taskId)
+  if (!task) return
+  const wt = task.worktree && !task.mergedAt ? task.worktree : null
+  const leaf = task.paneId ? findLeaf(task.paneId) : null
+  const ok = await askConfirm({
+    title: `Delete "${task.title}"?`,
+    text: wt
+      ? `${leaf ? leaf.title + ' closes, and ' : ''}its copy (${wt.path}) and branch ${wt.branch} are deleted with any work not merged yet. To keep the work, open Review and merge it first. This cannot be undone.`
+      : 'The card is removed from the board.',
+    confirmLabel: 'Delete',
+    danger: !!wt
+  })
+  if (!ok) return
+  if (wt) {
+    const rm = await removeTaskCopy(task, true)
+    if (!rm || !rm.ok) {
+      showToast(`The card was kept: its copy could not be deleted (${(rm && rm.error) || 'unknown error'}).`, { kind: 'error', timeout: 9000 })
+      return
+    }
+  }
+  removeTask(task.id)
+}
+provide('deleteTask', deleteTask)
+
 const reviewActions = {
   requestChanges(text) {
     const task = reviewTask.value

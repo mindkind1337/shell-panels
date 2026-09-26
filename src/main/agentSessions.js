@@ -88,6 +88,8 @@ export function findCodexSession(
   now = Date.now()
 ) {
   if (!cwd || !Number.isFinite(since)) return null
+  // Never back to 1970 (since 0): at most the last 30 days of session folders.
+  since = Math.max(since, now - 30 * 24 * 3600 * 1000)
   const root = join(home, '.codex', 'sessions')
   const want = normDir(cwd)
   const skip = new Set(exclude)

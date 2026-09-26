@@ -329,7 +329,12 @@ function quotePath(path) {
       shell === 'wsl' ? `/mnt/${m[1].toLowerCase()}/${rest}` : `/${m[1].toLowerCase()}/${rest}`
     return `'${unix.replace(/'/g, `'\\''`)}'`
   }
-  return /[\s&()'^;,]/.test(path) ? `"${path}"` : path
+  // PowerShell expands $var and $(...) inside "…" and in bare words: a
+  // single-quoted path is taken as it is (its quotes doubled).
+  if ((shell === 'powershell' || shell === 'pwsh') && !isAgent.value && /[\s&()'^;,$`{}@#[\]‘’‚‛]/.test(path)) {
+    return `'${path.replace(/['‘’‚‛]/g, (q) => q + q)}'`
+  }
+  return /[\s&()'^;,%]/.test(path) ? `"${path}"` : path
 }
 
 function onDragOver(e) {
@@ -611,6 +616,9 @@ function pasteText(text) {
   // Bracketed paste when the program asked for it (Claude Code, Codex, modern
   // shells), so multi-line text arrives as one paste instead of many commands.
   const bracketed = term && term.modes && term.modes.bracketedPasteMode
+  // Control sequences in the text (from another terminal or agent) could end
+  // the paste early and run the rest as keystrokes: they are removed.
+  text = String(text).replace(/\x1b\[20[01]~/g, '').replace(/\x1b/g, '')
   const data = bracketed ? `\x1b[200~${text}\x1b[201~` : text.replace(/\r?\n/g, '\r')
   window.shellApi.writePty(props.node.id, data)
 }

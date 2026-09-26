@@ -6,7 +6,7 @@
 // It only ever reads/writes its own `task`, so a change to one card never forces
 // its siblings to re-render.
 
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, inject } from 'vue'
 import { updateTask, removeTask, assignAgent } from '../taskBoardStore'
 import BrandIcon from './BrandIcon.vue'
 import { formatDuration } from '../../../shared/activity'
@@ -58,8 +58,11 @@ function cancelEdit() {
   editing.value = false
 }
 
+// The app asks first (and cleans up the task's copy); alone (tests), direct.
+const deleteTask = inject('deleteTask', null)
 function onDelete() {
-  removeTask(props.task.id)
+  if (deleteTask) deleteTask(props.task.id)
+  else removeTask(props.task.id)
 }
 
 // --- Agent assignment --------------------------------------------------------

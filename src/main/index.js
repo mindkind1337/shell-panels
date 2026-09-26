@@ -913,7 +913,12 @@ function codexSupportsNoDaemon() {
         process.platform === 'win32' ? 'cmd.exe' : 'codex',
         process.platform === 'win32' ? ['/d', '/s', '/c', 'codex --help'] : ['--help'],
         { windowsHide: true, timeout: 20000, env: freshEnv() },
-        (_err, stdout) => resolve(/--no-daemon\b/.test(String(stdout || '')))
+        (err, stdout) => {
+          const knows = /--no-daemon\b/.test(String(stdout || ''))
+          // Not installed yet, or too slow this time: asked again next time.
+          if (!knows && err) codexNoDaemon = null
+          resolve(knows)
+        }
       )
     })
   }
@@ -984,6 +989,7 @@ ipcMain.handle('tools:status', async () => {
 ipcMain.handle('tools:refreshPath', () => {
   freshPath = readFreshPath()
   agentCache = null
+  codexNoDaemon = null
   return true
 })
 
@@ -991,6 +997,7 @@ ipcMain.handle('tools:refreshPath', () => {
 ipcMain.handle('agents:refresh', (_evt, custom) => {
   freshPath = readFreshPath()
   agentCache = null
+  codexNoDaemon = null // an agent just installed or updated
   return getAgents(custom)
 })
 
@@ -1390,7 +1397,10 @@ function createWindow() {
     return { action: 'deny' }
   })
   mainWindow.webContents.on('will-navigate', (event, url) => {
-    if (url !== mainWindow.webContents.getURL() && !url.startsWith('http://localhost:5173')) {
+    // The dev server's page only in the dev build (the installed app never
+    // loads a page from the network: another local program could use that
+    // port).
+    if (url !== mainWindow.webContents.getURL() && !(!app.isPackaged && url.startsWith('http://localhost:5173'))) {
       event.preventDefault()
       if (isSafeExternal(url)) shell.openExternal(url)
     }
