@@ -20,21 +20,35 @@ function readGood(file, valid) {
   }
 }
 
-// Write `text` to `file` through a temp file + rename.
-function writeAtomic(file, text) {
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+// Write `text` to `file` through a temp file + rename. On Windows the rename
+// fails for a moment while another process (a team tool reading the file, an
+// antivirus scan) has the file open: tried again for about half a second.
+// The temp file never stays behind.
+export function writeFileAtomic(file, text) {
   const tmp = `${file}.${process.pid}.tmp`
   fs.writeFileSync(tmp, text, 'utf8')
-  try {
-    fs.renameSync(tmp, file)
-  } catch (err) {
+  for (let i = 0; ; i++) {
     try {
-      fs.unlinkSync(tmp)
-    } catch {
-      // nothing left to clean
+      fs.renameSync(tmp, file)
+      return
+    } catch (err) {
+      if (i >= 20 || !['EPERM', 'EBUSY', 'EACCES'].includes(err.code)) {
+        try {
+          fs.unlinkSync(tmp)
+        } catch {
+          // nothing left to clean
+        }
+        throw err
+      }
+      sleepSync(25)
     }
-    throw err
   }
 }
+const writeAtomic = writeFileAtomic
 
 export function writeJsonSafe(file, data, valid = anyShape) {
   const text = JSON.stringify(data, null, 2)

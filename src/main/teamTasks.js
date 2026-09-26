@@ -12,6 +12,7 @@
 //     which workspace (written by each Tessel window, read by the team tools)
 import fs from 'fs'
 import { join, resolve, isAbsolute } from 'path'
+import { writeFileAtomic } from './safeJson'
 
 const ID_RE = /^(?!\.)(?!.*\.\.)[A-Za-z0-9._-]{1,100}$/
 export const TASK_COLUMNS = ['todo', 'doing', 'review', 'done']
@@ -58,9 +59,7 @@ export function writeBoardPanes({ dir, owner, panes } = {}) {
 }
 
 function writeAtomic(file, data) {
-  const tmp = `${file}.${process.pid}.tmp`
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8')
-  fs.renameSync(tmp, file)
+  writeFileAtomic(file, JSON.stringify(data, null, 2))
 }
 
 // tasks: [{ id, title, column, assignee ("#1" or null), since }]

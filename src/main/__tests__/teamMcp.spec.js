@@ -346,7 +346,10 @@ describe('two Tessel windows in one project', () => {
 
   it('two processes writing at the same time lose no update', async () => {
     const url = (s) => 'data:text/javascript;base64,' + Buffer.from(s).toString('base64')
-    const channel = url(fs.readFileSync(join(__dirname, '..', 'teamChannel.js'), 'utf8'))
+    const safeJson = url(fs.readFileSync(join(__dirname, '..', 'safeJson.js'), 'utf8'))
+    const channel = url(
+      fs.readFileSync(join(__dirname, '..', 'teamChannel.js'), 'utf8').replace("'./safeJson'", JSON.stringify(safeJson))
+    )
     const notices = url(
       fs.readFileSync(join(__dirname, '..', 'teamNotices.js'), 'utf8').replace("'./teamChannel'", JSON.stringify(channel))
     )
@@ -627,6 +630,28 @@ describe('a message read once is never shown again', () => {
     } finally {
       delete process.env.TESSEL_PANE_ID
       delete process.env.TESSEL_PROJECT_DIR
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('a damaged team channel state', () => {
+  it('is restored from its previous copy instead of stopping the channel', () => {
+    const dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-chsafe-'))
+    try {
+      const A = { id: 'pane-1-aaaaaa', num: 1, title: 'A' }
+      const B = { id: 'pane-2-bbbbbb', num: 2, title: 'B' }
+      ensureTeamChannel({ dir, teamId: 'team-1', members: [A] })
+      ensureTeamChannel({ dir, teamId: 'team-1', members: [A, B] }) // a second save: the first is the copy
+      const file = join(dir, '.tessel', 'team-channel', 'team-1', 'state.json')
+      fs.writeFileSync(file, '{"version":1,"members":{') // cut by a crash
+      const res = pollTeamChannel({ dir, teamId: 'team-1' })
+      expect(res.ok).toBe(true)
+      expect(JSON.parse(fs.readFileSync(file, 'utf8')).version).toBe(1) // put back
+      const names = fs.readdirSync(join(dir, '.tessel', 'team-channel', 'team-1'))
+      expect(names.some((n) => n.startsWith('state.json.corrupt-'))).toBe(true)
+      expect(names.some((n) => n.endsWith('.tmp'))).toBe(false)
+    } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }
   })

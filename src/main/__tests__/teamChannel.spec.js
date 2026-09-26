@@ -287,8 +287,11 @@ describe('persistent team channel', () => {
   it('does not report a successful hold if persisting it fails', () => {
     put(outboxes['pane-a'], 'draft', { to: '#2', text: 'Cannot begin without a saved hold' })
     const message = pollTeamChannel({ dir, teamId }).deliveries[0]
-    const rename = vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => {
-      throw new Error('Simulated disk failure')
+    // The state file itself cannot be replaced (its backup copy may still be).
+    const realRename = fs.renameSync
+    const rename = vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (String(to).endsWith('state.json')) throw new Error('Simulated disk failure')
+      return realRename(from, to)
     })
     expect(
       holdTeamDelivery({ dir, teamId, id: message.id, toId: 'pane-b', state: 'inflight' })

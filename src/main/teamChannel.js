@@ -5,6 +5,7 @@
 import fs from 'fs'
 import { join, resolve, isAbsolute } from 'path'
 import { randomBytes, createHash } from 'crypto'
+import { writeJsonSafe, readJsonSafe } from './safeJson'
 
 const ID_RE = /^(?!\.)(?!.*\.\.)[A-Za-z0-9._-]{1,100}$/
 const MAX_FILE = 64 * 1024
@@ -23,13 +24,20 @@ function location({ dir, teamId } = {}) {
   return join(resolve(dir), '.tessel', 'team-channel', teamId)
 }
 
+function validState(state) {
+  return !!state && state.version === 1 && !!state.members && Array.isArray(state.messages) && !!state.seen
+}
+
+// The channel's state, saved crash-safe with its previous copy (.bak): a
+// damaged state.json is restored from that copy (the damaged one kept aside)
+// instead of stopping the whole channel.
 function readState(root) {
   const file = join(root, 'state.json')
-  if (!fs.existsSync(file)) return { version: 1, members: {}, messages: [], seen: {} }
-  const state = JSON.parse(fs.readFileSync(file, 'utf8'))
-  if (state.version !== 1 || !state.members || !Array.isArray(state.messages) || !state.seen)
-    throw new Error('The team channel state is invalid.')
-  return state
+  if (!fs.existsSync(file) && !fs.existsSync(`${file}.bak`)) return { version: 1, members: {}, messages: [], seen: {} }
+  const res = readJsonSafe(file, validState)
+  if (!res.data) throw new Error('The team channel state is invalid.')
+  if (res.from === 'backup') writeJsonSafe(file, res.data, validState)
+  return res.data
 }
 
 function saveState(root, state) {
@@ -57,9 +65,7 @@ function saveState(root, state) {
   for (const key of seenKeys.slice(0, Math.max(0, seenKeys.length - MAX_SEEN_FILES)))
     delete state.seen[key]
   fs.mkdirSync(root, { recursive: true })
-  const temp = join(root, `state.${process.pid}.tmp`)
-  fs.writeFileSync(temp, JSON.stringify(state, null, 2), 'utf8')
-  fs.renameSync(temp, join(root, 'state.json'))
+  writeJsonSafe(join(root, 'state.json'), state, validState)
 }
 
 function activeMembers(state) {
