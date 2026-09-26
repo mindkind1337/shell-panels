@@ -770,16 +770,21 @@ function closeLeaf(leafId, opts = {}) {
   }
 }
 
+// Arrange the workspace as an even grid. The panes already open are kept
+// (still running, in their order) and fill the grid first; only the empty
+// slots get a new shell. More panes than slots: rows are added, nothing is
+// ever closed.
 async function buildGrid(cols, rows, ws = currentWs.value) {
   if (!ws) return
-  const oldIds = []
-  forEachLeaf(ws.tree, (leaf) => oldIds.push(leaf.id))
+  const kept = []
+  forEachLeaf(ws.tree, (leaf) => kept.push(leaf))
+  rows = Math.max(rows, Math.ceil(kept.length / cols))
 
   const rowNodes = []
   for (let r = 0; r < rows; r++) {
     const leaves = []
     for (let c = 0; c < cols; c++) {
-      const leaf = await createLeaf(selectedShell.value, null, ws.cwd)
+      const leaf = kept.length ? kept.shift() : await createLeaf(selectedShell.value, null, ws.cwd)
       if (leaf) leaves.push(leaf)
     }
     if (!leaves.length) continue
@@ -806,15 +811,20 @@ async function buildGrid(cols, rows, ws = currentWs.value) {
           children: rowNodes
         })
 
+  const active = ws.activeId
   ws.tree = root
-  ws.activeId = firstLeafId(root)
+  // The pane you were in stays the active one.
+  if (!active || !findLeafIn(root, active)) ws.activeId = firstLeafId(root)
   maximizedId.value = null
+  window.dispatchEvent(new Event('terminal-layout-change'))
+}
 
-  oldIds.forEach((id) => {
-    window.shellApi.killPty(id)
-    dropBuffer(id)
-    clearAgentStatus(id)
+function findLeafIn(node, id) {
+  let found = null
+  forEachLeaf(node, (l) => {
+    if (l.id === id) found = l
   })
+  return found
 }
 
 function routeInput(sourceId, data) {
