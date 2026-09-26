@@ -808,7 +808,17 @@ ipcMain.handle(
     if (!claudeServerPresent(script)) {
       // Registered with another path (an older version, the other build):
       // replaced, since Claude Code refuses to add a name that exists.
-      if (claudeServerExists()) await removeMcp({ agent: 'claude', name: SERVER_NAME, scope: 'user' })
+      // The old entry is put back if the new one cannot be added, so Claude
+      // Code is never left without the team tools.
+      let before = null
+      if (claudeServerExists()) {
+        try {
+          before = JSON.parse(fs.readFileSync(join(os.homedir(), '.claude.json'), 'utf8')).mcpServers[SERVER_NAME]
+        } catch {
+          before = null
+        }
+        await removeMcp({ agent: 'claude', name: SERVER_NAME, scope: 'user' })
+      }
       const res = await addMcp({
         agent: 'claude',
         name: SERVER_NAME,
@@ -817,7 +827,19 @@ ipcMain.handle(
         scope: 'user'
       })
       if (res.ok) changed.push('Claude Code: MCP server tessel-team')
-      else errors.push(`Claude Code: ${res.error}`)
+      else {
+        errors.push(`Claude Code: ${res.error}`)
+        if (before && before.command) {
+          const words = [before.command, ...(Array.isArray(before.args) ? before.args : [])]
+          await addMcp({
+            agent: 'claude',
+            name: SERVER_NAME,
+            transport: 'stdio',
+            commandLine: words.map((w) => (/\s/.test(w) ? `"${w}"` : w)).join(' '),
+            scope: 'user'
+          })
+        }
+      }
     }
     try {
       const r = installClaudeHooks(script)
