@@ -8,6 +8,17 @@ and drive every pane at the same time.
 
 Built with **Electron + Vue 3 + xterm.js + node-pty**.
 
+## Download
+
+**To use Tessel, download the installer** from the
+[Releases page](https://github.com/mindkind1337/tessel/releases/latest):
+`Tessel-Setup-<version>.exe`, then run it. Nothing else is needed (no Node.js,
+no `npm`), and the app updates itself afterwards.
+
+The **Code → Download ZIP** button gives the source code instead: it is for
+working on Tessel itself (see [Build from source](#build-from-source)), and
+running it starts the development version.
+
 ## Features
 
 - **Multiple real shells in one window** — PowerShell, PowerShell 7, Command
@@ -98,9 +109,19 @@ npm run dev          # in one terminal
 node test-taskboard.cjs   # in another
 ```
 
-## Install (Windows)
+## Build from source
 
-Build the installer, then run it:
+For developing Tessel. Requires Node.js 22+ on Windows.
+
+```sh
+npm install
+npm run dev      # the development version (hot reload)
+```
+
+If Electron's download was skipped during `npm install`, `npm run dev`
+fetches it by itself before starting.
+
+To build your own installer instead of downloading it:
 
 ```sh
 npm install
