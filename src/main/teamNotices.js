@@ -66,6 +66,9 @@ const OWNER_GONE_MS = 5 * 60 * 1000
 // Another window's teams are never retired while its file is younger than
 // this (a window can stop writing for a while: paused in a debugger, asleep).
 const OWNER_TEAMS_KEPT_MS = 6 * 60 * 60 * 1000
+// A retired team's folder (nobody active, not used by any window) is deleted
+// once untouched for this long.
+const RETIRED_FOLDER_KEPT_MS = 7 * 24 * 60 * 60 * 1000
 const OWNER_TOUCH_MS = 60 * 1000
 const OWNER_RE = /^[A-Za-z0-9_-]{1,40}$/
 
@@ -177,7 +180,16 @@ export function retireOldTeams({ dir, liveTeamIds, owner } = {}) {
   for (const t of fs.readdirSync(b)) {
     if (!ID_RE.test(t) || live.has(t) || theirs.has(t) || !fs.existsSync(join(b, t, 'state.json'))) continue
     if (owner && !mine.has(t) && others.length) continue // unknown origin, another window runs
-    if (!hasActive(b, t)) continue
+    if (!hasActive(b, t)) {
+      // Retired long ago and used by nobody: its folder goes.
+      try {
+        if (Date.now() - fs.statSync(join(b, t, 'state.json')).mtimeMs > RETIRED_FOLDER_KEPT_MS)
+          fs.rmSync(join(b, t), { recursive: true, force: true })
+      } catch {
+        // tried again next time
+      }
+      continue
+    }
     const res = ensureTeamChannel({ dir, teamId: t, members: [] })
     if (res.ok) retired.push(t)
   }

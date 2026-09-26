@@ -558,3 +558,47 @@ describe('the workspace board for an agent working alone', () => {
     expect(call('team_tasks').isError).toBe(true)
   })
 })
+
+describe('the team channel does not grow forever', () => {
+  let dir
+  beforeEach(() => {
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-growth-'))
+  })
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+  const root = (t) => join(dir, '.tessel', 'team-channel', t)
+
+  it('drops messages nobody can receive after 7 days, keeps the rest', () => {
+    const A = { id: 'pane-1-aaaaaa', num: 1, title: 'A' }
+    const B = { id: 'pane-2-bbbbbb', num: 2, title: 'B' }
+    ensureTeamChannel({ dir, teamId: 'team-1', members: [A, B] })
+    const file = join(root('team-1'), 'state.json')
+    const st = JSON.parse(fs.readFileSync(file, 'utf8'))
+    const old = Date.now() - 8 * 24 * 3600 * 1000
+    st.messages.push(
+      { id: 'm1', fromId: A.id, toId: B.id, text: 'old, B still here', status: 'pending', createdAt: old },
+      { id: 'm2', fromId: A.id, toId: 'pane-9-gone00', text: 'old, to someone gone', status: 'pending', createdAt: old },
+      { id: 'm3', fromId: A.id, toId: 'pane-9-gone00', text: 'recent, to someone gone', status: 'pending', createdAt: Date.now() }
+    )
+    fs.writeFileSync(file, JSON.stringify(st))
+    ensureTeamChannel({ dir, teamId: 'team-1', members: [A, B] }) // any save
+    const ids = JSON.parse(fs.readFileSync(file, 'utf8')).messages.map((m) => m.id)
+    expect(ids).toContain('m1')
+    expect(ids).not.toContain('m2')
+    expect(ids).toContain('m3')
+  })
+
+  it('deletes a retired team folder untouched for 7 days, not a recent one', () => {
+    const A = { id: 'pane-1-aaaaaa', num: 1, title: 'A' }
+    ensureTeamChannel({ dir, teamId: 'team-old', members: [A] })
+    ensureTeamChannel({ dir, teamId: 'team-new', members: [A] })
+    writeCurrentTeams({ dir, owner: 'dev', panes: {} })
+    retireOldTeams({ dir, liveTeamIds: [], owner: 'dev' }) // both retired now
+    const long = new Date(Date.now() - 8 * 24 * 3600 * 1000)
+    fs.utimesSync(join(root('team-old'), 'state.json'), long, long)
+    retireOldTeams({ dir, liveTeamIds: [], owner: 'dev' })
+    expect(fs.existsSync(root('team-old'))).toBe(false)
+    expect(fs.existsSync(root('team-new'))).toBe(true)
+  })
+})

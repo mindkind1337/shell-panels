@@ -13,6 +13,9 @@ const MAX_PER_SENDER = 20
 const MAX_DELIVERIES = 200
 const MAX_DELIVERED_HISTORY = 2000
 const MAX_SEEN_FILES = 10000
+// A message nobody can receive any more (its recipient left the team, or the
+// team was ungrouped) is dropped after this long.
+const UNDELIVERABLE_KEPT_MS = 7 * 24 * 60 * 60 * 1000
 
 function location({ dir, teamId } = {}) {
   if (typeof dir !== 'string' || !isAbsolute(dir) || !fs.existsSync(dir)) return null
@@ -43,6 +46,13 @@ function saveState(root, state) {
       return true
     })
   }
+  const now = Date.now()
+  state.messages = state.messages.filter(
+    (m) =>
+      m.status === 'delivered' ||
+      (state.members[m.toId] && state.members[m.toId].active) ||
+      now - (m.createdAt || 0) < UNDELIVERABLE_KEPT_MS
+  )
   const seenKeys = Object.keys(state.seen)
   for (const key of seenKeys.slice(0, Math.max(0, seenKeys.length - MAX_SEEN_FILES)))
     delete state.seen[key]
