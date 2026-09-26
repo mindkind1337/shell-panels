@@ -1200,6 +1200,8 @@ ipcMain.handle('pty:attach', async (_evt, id) => {
     return { ok: false, error: err.message }
   }
   if (!res.ok) return { ok: false }
+  // Output queued here but not sent yet is in the snapshot already.
+  pendingData.delete(id)
   ptyInfo.set(id, { shellId: res.shellId, shellName: res.shellName, backend: res.backend })
   return {
     ok: true,

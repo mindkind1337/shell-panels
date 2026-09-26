@@ -29,11 +29,14 @@ export function startCapture() {
   window.shellApi.onData(({ id, data }) => bufferFor(id).push(data))
 }
 
-// Pre-fill a pane's history (output replayed from the terminal host) before
-// the pane mounts.
+// A pane's history from the terminal host (re-attach): it holds everything
+// the terminal printed so far, so it replaces what was received before (kept
+// too, it would show twice). Output after it arrives normally.
 export function seedBuffer(id, text) {
   if (!text) return
-  bufferFor(id).unshift(text)
+  const b = new ChunkBuffer(MAX)
+  b.push(text)
+  buffers.set(id, b)
 }
 
 export function getBuffer(id) {

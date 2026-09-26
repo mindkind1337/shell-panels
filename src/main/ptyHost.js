@@ -206,11 +206,19 @@ function handle(sock, msg) {
         screen: makeScreen(msg.cols, msg.rows),
         exited: false,
         exitCode: null,
-        signal: null
+        signal: null,
+        holding: 0, // snapshots in progress
+        held: [] // output that arrived meanwhile
       }
       ptys.set(msg.id, entry)
       child.onData((data) => {
         if (ptys.get(msg.id) !== entry) return // stopped and replaced
+        // A snapshot is being taken (attach): held back, sent right after it,
+        // so each piece of output reaches the app exactly once.
+        if (entry.holding) {
+          entry.held.push(data)
+          return
+        }
         entry.screen.vt.write(data)
         broadcast({ op: 'data', id: msg.id, data })
       })
@@ -232,7 +240,17 @@ function handle(sock, msg) {
         reply({ ok: false, error: 'not found' })
         return
       }
-      snapshot(p).then((buffer) => reply({ ok: true, ...describePty(msg.id, p), buffer }))
+      p.holding++
+      snapshot(p).then((buffer) => {
+        reply({ ok: true, ...describePty(msg.id, p), buffer })
+        p.holding--
+        if (p.holding) return
+        const held = p.held.splice(0)
+        for (const data of held) {
+          p.screen.vt.write(data)
+          broadcast({ op: 'data', id: msg.id, data })
+        }
+      })
       return
     }
     case 'write': {
