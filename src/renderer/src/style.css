@@ -4631,6 +4631,13 @@ button.act-stat:hover,
   outline-offset: 2px;
 }
 
+/* When the task started and was finished. */
+.task-timing {
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
 .task-card-extra {
   display: flex;
   flex-direction: column;

@@ -33,6 +33,11 @@ export function updateTask(id, patch = {}) {
   // Entering Doing (from any column, by any path) starts a new period for
   // agent tracking.
   if (rest.column === 'doing' && task.column !== 'doing' && !('doingSince' in rest)) rest.doingSince = Date.now()
+  // When the work started (first time in Doing) and when it was finished
+  // (entering Done; taken back out of Done, it is not finished any more).
+  if (rest.column === 'doing' && !task.startedAt && !('startedAt' in rest)) rest.startedAt = Date.now()
+  if (rest.column === 'done' && task.column !== 'done' && !('doneAt' in rest)) rest.doneAt = Date.now()
+  if (rest.column && rest.column !== 'done' && task.column === 'done') rest.doneAt = null
   Object.assign(task, rest)
   return task
 }

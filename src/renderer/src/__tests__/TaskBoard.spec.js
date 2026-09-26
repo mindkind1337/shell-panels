@@ -197,3 +197,27 @@ describe('TaskCard.vue', () => {
     expect(options.some((o) => o.text().includes('gemini'))).toBe(true)
   })
 })
+
+describe('when a task started and finished', () => {
+  it('records the first start, the finish, and forgets the finish when reopened', async () => {
+    const { tasks, addTask, moveTask } = await import('../taskBoardStore')
+    const t = addTask({ title: 'Timed task' })
+    moveTask(t.id, 'doing')
+    const started = t.startedAt
+    expect(typeof started).toBe('number')
+    moveTask(t.id, 'review')
+    moveTask(t.id, 'doing')
+    expect(t.startedAt).toBe(started) // the first start stays
+    moveTask(t.id, 'done')
+    expect(typeof t.doneAt).toBe('number')
+    moveTask(t.id, 'review')
+    expect(t.doneAt).toBe(null)
+    tasks.splice(tasks.indexOf(t), 1)
+  })
+
+  it('shows start, finish and duration on a done card', () => {
+    const task = { id: 'task-t-1', title: 'Done card', column: 'done', paneId: null, startedAt: Date.now() - 23 * 60000, doneAt: Date.now() }
+    const wrapper = mount(TaskCard, { props: { task, agentPanes: [] } })
+    expect(wrapper.get('[data-test="task-timing"]').text()).toMatch(/^Started .+ · done .+ · 23 min$/)
+  })
+})

@@ -9,6 +9,7 @@
 import { ref, computed, nextTick } from 'vue'
 import { updateTask, removeTask, assignAgent } from '../taskBoardStore'
 import BrandIcon from './BrandIcon.vue'
+import { formatDuration } from '../../../shared/activity'
 
 const props = defineProps({
   task: { type: Object, required: true },
@@ -71,6 +72,31 @@ const selectedPane = computed({
 const assignedPane = computed(
   () => props.agentPanes.find((p) => p.id === props.task.paneId) || null
 )
+
+// When the work started and was finished: "Started 10:42 · done 11:05 ·
+// 23 min" (a date instead of today's time for other days).
+function when(t) {
+  const d = new Date(t)
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  if (d.toDateString() === new Date().toDateString()) return time
+  return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`
+}
+const timing = computed(() => {
+  const t = props.task
+  const start = t.startedAt || t.doingSince
+  if (t.column === 'done' && t.doneAt) {
+    return start ? `Started ${when(start)} · done ${when(t.doneAt)} · ${formatDuration(t.doneAt - start)}` : `Done ${when(t.doneAt)}`
+  }
+  return start ? `Started ${when(start)}` : ''
+})
+const timingTitle = computed(() => {
+  const t = props.task
+  const start = t.startedAt || t.doingSince
+  const parts = []
+  if (start) parts.push(`Started ${new Date(start).toLocaleString()}`)
+  if (t.column === 'done' && t.doneAt) parts.push(`Finished ${new Date(t.doneAt).toLocaleString()}`)
+  return parts.join('\n')
+})
 
 // Display label for a pane: its title, falling back to the agent id.
 function paneLabel(pane) {
@@ -154,6 +180,8 @@ function paneLabel(pane) {
       <span>{{ assignedPane.track.text }}<template v-if="assignedPane.track.onTask"> · on this task {{ assignedPane.track.onTask }}</template></span>
       <span v-if="assignedPane.track.reason" class="task-track-reason">{{ assignedPane.track.reason }}</span>
     </div>
+
+    <div v-if="timing" class="task-timing" data-test="task-timing" :title="timingTitle">{{ timing }}</div>
 
     <div v-if="task.worktree || task.brief" class="task-card-extra">
       <span v-if="task.worktree" class="task-branch" :title="task.worktree.path">{{ task.worktree.branch }}</span>
