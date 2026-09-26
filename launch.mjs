@@ -5,10 +5,32 @@ import { spawn, spawnSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { createRequire } from 'module'
+import { fileURLToPath } from 'url'
 
 const mode = process.argv[2] || 'dev'
 const env = { ...process.env }
 delete env.ELECTRON_RUN_AS_NODE
+
+// --hidden: run in the background with no window at all (the dev server's
+// messages go to a log file), and give the console back at once. It stops by
+// itself when Tessel is closed.
+if (process.argv.includes('--hidden')) {
+  const logDir = path.join(process.env.APPDATA || process.env.HOME || '.', 'tessel-dev', 'logs')
+  fs.mkdirSync(logDir, { recursive: true })
+  const logFile = path.join(logDir, 'dev-server.log')
+  const out = fs.openSync(logFile, 'a')
+  const self = fileURLToPath(import.meta.url)
+  const child = spawn(process.execPath, [self, mode], {
+    detached: true,
+    windowsHide: true,
+    stdio: ['ignore', out, out],
+    env,
+    cwd: path.dirname(self)
+  })
+  child.unref()
+  console.log(`Tessel ${mode} started in the background (no window). Its messages: ${logFile}`)
+  process.exit(0)
+}
 
 // In dev, --watch restarts the app when its background code changes. That is
 // safe: terminals live in the terminal host (src/main/ptyHost.js), so shells
@@ -45,9 +67,15 @@ ensureElectron()
 
 // One command line for the shell (the arguments are fixed words): passing
 // them separately with shell: true is deprecated in Node (DEP0190).
+// The project's own programs (electron-vite) even when not run through npm
+// (the background mode starts this file directly).
+const bin = path.join(path.dirname(fileURLToPath(import.meta.url)), 'node_modules', '.bin')
+for (const k of Object.keys(env)) if (k.toLowerCase() === 'path') env[k] = bin + path.delimiter + env[k]
 const child = spawn(['electron-vite', ...args].join(' '), {
   stdio: 'inherit',
   env,
-  shell: true
+  shell: true,
+  // No console window of its own (in the background mode there is none to share).
+  windowsHide: true
 })
 child.on('exit', (code) => process.exit(code ?? 0))
