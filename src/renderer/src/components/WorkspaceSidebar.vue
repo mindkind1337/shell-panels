@@ -656,12 +656,12 @@ defineExpose({
             : sessions.some(canPick)
               ? pickTeam
                 ? `Tick the agents to add to ${pickTeam.name}`
-                : 'Tick the agents that work together'
+                : 'Tick at least two agents that work together'
               : 'Every agent here is already in a team. Use Leave in an agent’s ⋯ menu to free it.'
         }}</span>
         <div class="ws-message-actions">
           <button class="ws-message-cancel" @click="cancelPicking">Cancel</button>
-          <button class="ws-message-send" :disabled="!picked.length" @click="groupPicked">
+          <button class="ws-message-send" :disabled="pickTeam ? !picked.length : picked.length < 2" @click="groupPicked">
             {{ pickTeam ? `Add to ${pickTeam.name}` : 'Group as a team' }}
           </button>
         </div>
@@ -681,10 +681,11 @@ defineExpose({
           <button class="ctx-menu-item" role="menuitem" @click="pick(() => emit('new-task'))">
             New task…
           </button>
+          <!-- A team needs at least two agents not in a team yet. -->
           <button
+            v-if="sessions.filter(canPick).length >= 2"
             class="ctx-menu-item"
             role="menuitem"
-            :disabled="!sessions.some(canPick)"
             @click="pick(() => startPicking('new'))"
           >
             New team…
