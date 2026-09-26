@@ -35,6 +35,8 @@ export function updateTask(id, patch = {}) {
   if (rest.column === 'doing' && task.column !== 'doing' && !('doingSince' in rest)) rest.doingSince = Date.now()
   // When the work started (first time in Doing) and when it was finished
   // (entering Done; taken back out of Done, it is not finished any more).
+  // When it arrived in its column: the board lists each column in that order.
+  if (rest.column && rest.column !== task.column && !('columnSince' in rest)) rest.columnSince = Date.now()
   if (rest.column === 'doing' && !task.startedAt && !('startedAt' in rest)) rest.startedAt = Date.now()
   if (rest.column === 'done' && task.column !== 'done' && !('doneAt' in rest)) rest.doneAt = Date.now()
   if (rest.column && rest.column !== 'done' && task.column === 'done') rest.doneAt = null

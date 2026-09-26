@@ -29,6 +29,10 @@ const grouped = computed(() => {
     if (props.workspaceId && task.wsId !== props.workspaceId) continue
     if (groups[task.column]) groups[task.column].push(task)
   }
+  // Each column in the order cards arrived in it (Done: the order they were
+  // finished), the latest at the bottom. Cards from before this was recorded
+  // keep their place at the top.
+  for (const c of COLUMNS) groups[c].sort((a, b) => (a.columnSince || 0) - (b.columnSince || 0))
   return groups
 })
 

@@ -221,3 +221,25 @@ describe('when a task started and finished', () => {
     expect(wrapper.get('[data-test="task-timing"]').text()).toMatch(/^Started .+ · done .+ · 23 min$/)
   })
 })
+
+describe('the order of the cards in a column', () => {
+  it('lists cards in the order they arrived, the latest at the bottom', async () => {
+    const { tasks, addTask, moveTask } = await import('../taskBoardStore')
+    const before = tasks.length
+    const a = addTask({ title: 'First done' })
+    const b = addTask({ title: 'Second done' })
+    const now = Date.now
+    let t = 1000
+    Date.now = () => (t += 1000)
+    try {
+      moveTask(b.id, 'done') // b finished first
+      moveTask(a.id, 'done')
+    } finally {
+      Date.now = now
+    }
+    const wrapper = mount(TaskBoard, { props: { agentPanes: [], workspaceId: null } })
+    const done = wrapper.get('[data-column="done"]').findAll('[data-test="card-title"]').map((w) => w.text())
+    expect(done.slice(-2)).toEqual(['Second done', 'First done'])
+    tasks.splice(before)
+  })
+})
