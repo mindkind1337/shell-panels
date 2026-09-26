@@ -24,7 +24,7 @@
 const fs = require('fs')
 const path = require('path')
 
-const VERSION = '1.3.0'
+const VERSION = '1.3.1'
 const MAX_TEXT = 6000
 
 // --- Finding my team and me ---------------------------------------------------
@@ -86,6 +86,24 @@ function currentPanes(base) {
   return current && current.panes ? current.panes : null
 }
 
+// This pane was a member of a team of this project (now inactive in it).
+function formerMember(paneId, start) {
+  for (const dir of candidateDirs(start)) {
+    const base = path.join(dir, '.tessel', 'team-channel')
+    let names = []
+    try {
+      names = fs.readdirSync(base)
+    } catch {
+      continue
+    }
+    for (const n of names) {
+      const state = readJson(path.join(base, n, 'state.json'))
+      if (state && state.members && state.members[paneId]) return true
+    }
+  }
+  return false
+}
+
 // -> { root, state, meId, me, teamId } or { error }
 function locate(meArg, start) {
   const paneId = process.env.TESSEL_PANE_ID || ''
@@ -104,7 +122,16 @@ function locate(meArg, start) {
     }
     if (hits.length) break
   }
-  if (!hits.length) return { error: 'You are not in a Tessel team right now (see Sessions in Tessel).' }
+  if (!hits.length) {
+    // Was it in a team that the user ungrouped (or that it left)? Say so
+    // plainly, so the agent stops acting as a team member.
+    if (paneId && formerMember(paneId, start))
+      return {
+        error:
+          'You are no longer in a Tessel team: the user ungrouped it (or took you out). You now work alone: talk to the user directly, do not use the team tools and do not wait for teammates.'
+      }
+    return { error: 'You are not in a Tessel team right now (see Sessions in Tessel).' }
+  }
   if (hits.length > 1) return { error: `"${meArg}" matches several agents: Tessel cannot tell which one you are.` }
   const { id, team, base } = hits[0]
   const root = path.join(base, team)

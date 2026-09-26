@@ -56,7 +56,7 @@ describe('Tessel team tools (background messages)', () => {
     expect(retireOldTeams({ dir, liveTeamIds: ['team-2-new'] }).retired).toEqual([teamId])
     expect(as(A).teamId).toBe('team-2-new')
     writeCurrentTeams({ dir, panes: {} })
-    expect(as(A).error).toMatch(/not in a Tessel team/)
+    expect(as(A).error).toMatch(/no longer in a Tessel team/)
   })
 
   it('a message is marked read only if it is shown (a failed read note leaves it unread)', () => {
@@ -303,9 +303,9 @@ describe('two Tessel windows in one project', () => {
     writeCurrentTeams({ dir, owner: 'app', panes: { 'pane-9-zzzzzz': { team: 'team-9', num: 2 } } })
     expect(found('pane-9-zzzzzz').teamId).toBe('team-9')
     age('app', 6 * 60 * 1000)
-    expect(found('pane-9-zzzzzz').error).toMatch(/not in a Tessel team/)
+    expect(found('pane-9-zzzzzz').error).toMatch(/no longer in a Tessel team/)
     fs.writeFileSync(ownFile('app'), '{damaged')
-    expect(found('pane-9-zzzzzz').error).toMatch(/not in a Tessel team/)
+    expect(found('pane-9-zzzzzz').error).toMatch(/no longer in a Tessel team/)
   })
 
   it('an older Tessel (current.json only) still works', () => {
@@ -449,5 +449,33 @@ describe('the team board through the team tools', () => {
     expect(text).toContain('To do:\n  task-2-3  Team view  (#4)')
     expect(text).toContain('Doing:\n  task-1-2  Review terminal scroll  (#1)')
     expect(publishTeamTasks({ dir, teamId, tasks: [{ id: 'task-2-3', title: 'Team view', column: 'todo', assignee: '#4' }, { id: 'task-1-2', title: 'Review terminal scroll', column: 'doing', assignee: '#1', since: 1 }] }).changed).toBe(true)
+  })
+})
+
+describe('an agent whose team was ungrouped', () => {
+  let dir
+  beforeEach(() => {
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-solo-'))
+  })
+  afterEach(() => {
+    delete process.env.TESSEL_PANE_ID
+    delete process.env.TESSEL_PROJECT_DIR
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('is told plainly it now works alone', () => {
+    const A = { id: 'pane-1-aaaaaa', num: 1, title: 'Codex CLI' }
+    ensureTeamChannel({ dir, teamId: 'team-1', members: [A] })
+    writeCurrentTeams({ dir, owner: 'dev', panes: { [A.id]: { team: 'team-1', num: 1 } } })
+    process.env.TESSEL_PANE_ID = A.id
+    process.env.TESSEL_PROJECT_DIR = dir
+    expect(mcp.locate().teamId).toBe('team-1')
+    // The user ungroups the team.
+    writeCurrentTeams({ dir, owner: 'dev', panes: {} })
+    retireOldTeams({ dir, liveTeamIds: [], owner: 'dev' })
+    expect(mcp.locate().error).toMatch(/no longer in a Tessel team.*work alone/)
+    // Never in a team at all: the usual answer.
+    process.env.TESSEL_PANE_ID = 'pane-9-zzzzzz'
+    expect(mcp.locate().error).toMatch(/not in a Tessel team right now/)
   })
 })
