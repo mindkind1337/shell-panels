@@ -669,6 +669,7 @@ function saveLayoutNow() {
     sidebarCollapsed: sidebarCollapsed.value,
     sidebarWidth: sidebarWidth.value,
     taskPanelWidth: taskPanelWidth.value,
+    taskPanelOpen: taskPanelOpen.value,
     currentIndex: Math.max(
       0,
       workspaces.value.findIndex((w) => w.id === currentWsId.value)
@@ -4690,6 +4691,8 @@ async function restoreOrSeedLayout() {
     }
     broadcast.value = !!saved.broadcast
     sidebarCollapsed.value = !!saved.sidebarCollapsed
+    // The task board opens again if it was open.
+    if (saved.taskPanelOpen === true) taskPanelOpen.value = true
     if (Number.isFinite(saved.taskPanelWidth))
       taskPanelWidth.value = Math.round(Math.min(TASK_PANEL_MAX, Math.max(TASK_PANEL_MIN, saved.taskPanelWidth)))
     if (Number.isFinite(saved.sidebarWidth)) {
@@ -4789,6 +4792,7 @@ onMounted(async () => {
       sidebarCollapsed,
       sidebarWidth,
       taskPanelWidth,
+      taskPanelOpen,
       settings,
       placement,
       teams
