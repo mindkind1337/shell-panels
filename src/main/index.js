@@ -27,7 +27,14 @@ import { takeTeamAcks } from './teamAcks'
 import { writeJsonSafe, readJsonSafe } from './safeJson'
 import { addNotices, writeCurrentTeams, retireOldTeams } from './teamNotices'
 import { publishTeamTasks, takeTeamRequests, finishTeamRequests, messageStatuses, writeBoardPanes } from './teamTasks'
-import { writeServerScript, installClaudeHooks, installCodexServer, claudeServerPresent, SERVER_NAME } from './teamInstall'
+import {
+  writeServerScript,
+  installClaudeHooks,
+  installCodexServer,
+  claudeServerPresent,
+  claudeServerExists,
+  SERVER_NAME
+} from './teamInstall'
 import teamServerSource from './teamMcp/server.cjs?raw'
 import { ensureInbox, takeInbox, removeInbox } from './leadInbox'
 import {
@@ -791,10 +798,14 @@ function validateCodexConfig(text) {
 ipcMain.handle(
   'team:install',
   safe(async () => {
-    const script = writeServerScript(app.getPath('userData'), teamServerSource)
+    // Shared by the dev build and the installed app (see teamInstall.js).
+    const script = writeServerScript(join(app.getPath('appData'), 'tessel-team'), teamServerSource)
     const changed = []
     const errors = []
     if (!claudeServerPresent(script)) {
+      // Registered with another path (an older version, the other build):
+      // replaced, since Claude Code refuses to add a name that exists.
+      if (claudeServerExists()) await removeMcp({ agent: 'claude', name: SERVER_NAME, scope: 'user' })
       const res = await addMcp({
         agent: 'claude',
         name: SERVER_NAME,
@@ -823,7 +834,15 @@ ipcMain.handle(
     if (errors.length) log.error('team', `team tools: ${errors.join('; ')}`)
     // The tools' version: an agent started with an older one is restarted
     // (in place, when quiet) to load the new tools.
-    const version = (/const VERSION = '([^']+)'/.exec(teamServerSource) || [])[1] || null
+    // The version agents run: the shared file's (another build may have put
+    // a newer one there).
+    let installed = teamServerSource
+    try {
+      installed = fs.readFileSync(script, 'utf8')
+    } catch {
+      // not readable: ours
+    }
+    const version = (/const VERSION = '([^']+)'/.exec(installed) || [])[1] || null
     return { ok: errors.length === 0, script, changed, errors, version }
   })
 )

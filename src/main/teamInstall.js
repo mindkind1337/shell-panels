@@ -1,7 +1,10 @@
 // Set up the Tessel team tools (teamMcp/server.cjs) for the agent CLIs, so
 // teammates message each other in the background (never typed into a
 // terminal):
-//   - the server script, copied to Tessel's data folder;
+//   - the server script, copied to a folder shared by every Tessel build
+//     (%APPDATA%\tessel-team): the dev build and the installed app point
+//     the agents to the same file, so they never rewrite each other's
+//     settings; the file is only replaced by a newer version;
 //   - Claude Code: an MCP server "tessel-team" (user scope) and hooks that
 //     show new team messages as context (UserPromptSubmit, PostToolUse, Stop);
 //   - Codex: the same MCP server in ~/.codex/config.toml, forwarding the
@@ -30,16 +33,32 @@ function writeAtomic(file, text) {
   fs.renameSync(tmp, file)
 }
 
-// Write the server script where agents can run it. -> its path
-export function writeServerScript(dataDir, source) {
-  const file = join(dataDir, OURS)
+// The server's VERSION ('1.4.0' -> [1, 4, 0]), or null.
+export function scriptVersion(source) {
+  const m = /const VERSION = '(\d+)\.(\d+)\.(\d+)'/.exec(String(source || ''))
+  return m ? m.slice(1).map(Number) : null
+}
+
+function older(a, b) {
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] < b[i]
+  return false
+}
+
+// Write the server script where agents can run it, in the shared folder:
+// only when missing, unreadable or older (another build with a newer version
+// keeps its own). -> its path
+export function writeServerScript(sharedDir, source) {
+  fs.mkdirSync(sharedDir, { recursive: true })
+  const file = join(sharedDir, OURS)
   let old = null
   try {
     old = fs.readFileSync(file, 'utf8')
   } catch {
     // first time
   }
-  if (old !== source) writeAtomic(file, source)
+  const have = scriptVersion(old)
+  const mine = scriptVersion(source)
+  if (old !== source && (!have || !mine || older(have, mine))) writeAtomic(file, source)
   return file
 }
 
@@ -141,6 +160,12 @@ export async function installCodexServer(scriptPath, validate, home = os.homedir
 
 // Claude Code's MCP server (user scope), from ~/.claude.json. -> true when
 // it is already there with this script.
+// A "tessel-team" server is registered for Claude Code (any script path).
+export function claudeServerExists(home = os.homedir()) {
+  const cfg = readJson(join(home, '.claude.json'))
+  return !!(cfg && cfg.mcpServers && cfg.mcpServers[SERVER_NAME])
+}
+
 export function claudeServerPresent(scriptPath, home = os.homedir()) {
   const cfg = readJson(join(home, '.claude.json'))
   const s = cfg && cfg.mcpServers && cfg.mcpServers[SERVER_NAME]

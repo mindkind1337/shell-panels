@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import fs from 'fs'
 import os from 'os'
 import { join, resolve, sep } from 'path'
-import { installClaudeHooks, installCodexServer } from '../teamInstall'
+import { installClaudeHooks, installCodexServer, writeServerScript } from '../teamInstall'
 
 describe('team setup preserves existing agent configuration', () => {
   let fixtureHome
@@ -148,5 +148,25 @@ describe('team setup preserves existing agent configuration', () => {
       )
     ).rejects.toThrow('Codex unavailable')
     expect(fs.readFileSync(configFile(), 'utf8')).toBe(original)
+  })
+})
+
+describe('the team tools script shared by every Tessel build', () => {
+  it('is only replaced by a newer version', () => {
+    const dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-shared-'))
+    try {
+      const v = (x) => `const VERSION = '${x}'\n// code ${x}\n`
+      const file = writeServerScript(dir, v('1.4.0'))
+      expect(fs.readFileSync(file, 'utf8')).toBe(v('1.4.0'))
+      writeServerScript(dir, v('1.3.1')) // the other build, older
+      expect(fs.readFileSync(file, 'utf8')).toBe(v('1.4.0'))
+      writeServerScript(dir, v('1.10.0')) // newer (numbers, not text)
+      expect(fs.readFileSync(file, 'utf8')).toBe(v('1.10.0'))
+      fs.writeFileSync(file, 'damaged')
+      writeServerScript(dir, v('1.4.0'))
+      expect(fs.readFileSync(file, 'utf8')).toBe(v('1.4.0'))
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
