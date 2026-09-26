@@ -43,6 +43,8 @@ function onAdd() {
 
 // Dropping a dragged card (TaskCard) on a column moves it there.
 const TASK_DRAG_TYPE = 'application/x-tessel-task'
+// A drag that ends anywhere (dropped elsewhere, Esc) clears it (dragend on
+// the board, in the template).
 const dropColumn = ref(null)
 function isTaskDrag(e) {
   return !!e.dataTransfer && [...e.dataTransfer.types].includes(TASK_DRAG_TYPE)
@@ -72,7 +74,7 @@ function columnLabel(column) {
 </script>
 
 <template>
-  <div class="task-board">
+  <div class="task-board" @dragend="dropColumn = null">
     <div class="task-board-head">
       <button
         class="task-board-new"

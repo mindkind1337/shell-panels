@@ -876,6 +876,13 @@ function startTaskResize(e) {
   }
   taskResizeLastDown = now
   const right = e.currentTarget.parentElement.getBoundingClientRect().right
+  // Keep receiving the pointer even outside the window, so letting go there
+  // still ends the resize.
+  try {
+    e.currentTarget.setPointerCapture(e.pointerId)
+  } catch {
+    // not capturable: the window listeners below still end it
+  }
   taskResizing.value = true
   document.body.classList.add('ws-resizing')
   const move = (ev) => {
@@ -887,10 +894,14 @@ function startTaskResize(e) {
     document.body.classList.remove('ws-resizing')
     window.removeEventListener('pointermove', move)
     window.removeEventListener('pointerup', up)
+    window.removeEventListener('pointercancel', up)
+    window.removeEventListener('blur', up)
     refitSoon()
   }
   window.addEventListener('pointermove', move)
   window.addEventListener('pointerup', up)
+  window.addEventListener('pointercancel', up)
+  window.addEventListener('blur', up)
 }
 
 // Live list of agent panes, handed to the board so a task can be assigned to
