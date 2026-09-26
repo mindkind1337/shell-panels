@@ -29,10 +29,16 @@ let poll = null
 const dirty = computed(() => editing.value && draft.value !== text.value)
 const blocks = computed(() => parseMarkdown(text.value))
 
+// Each read is numbered; a save makes every read started before it stale,
+// so a slow read can never put the old text back after a save.
+let loadSeq = 0
+let savedAtSeq = 0
 async function load(initial = false) {
   if (!window.shellApi.loadNotes) return
+  const seq = ++loadSeq
   const res = await window.shellApi.loadNotes({ dir: props.dir, content: props.template })
   loading.value = false
+  if (seq <= savedAtSeq) return // started before the last save
   if (!res || !res.ok) {
     status.value = `Could not read the notes: ${(res && res.error) || 'unknown error'}`
     return
@@ -69,6 +75,7 @@ async function save(force = false) {
     baseMtime: force && theirs.value ? theirs.value.mtime : mtime.value
   })
   if (res && res.ok) {
+    savedAtSeq = loadSeq
     text.value = draft.value
     mtime.value = res.mtime
     theirs.value = null

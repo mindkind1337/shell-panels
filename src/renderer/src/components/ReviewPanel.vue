@@ -40,16 +40,23 @@ const feedbackEl = ref(null)
 // content changes in a new commit is unmarked.
 const viewed = viewedStore(props.task.id)
 
+// One refresh at a time (the 5 s poll skips while one runs), so an older
+// answer can never land after a newer one.
+let refreshing = false
 async function refresh() {
-  if (!args.value) return
+  if (!args.value || refreshing) return
+  refreshing = true
   loading.value = true
   let next
   try {
     next = await window.shellApi.review.info(args.value)
   } catch (err) {
     next = { ok: false, error: err.message }
+  } finally {
+    refreshing = false
   }
   loading.value = false
+  if (!next) next = { ok: false, error: 'No answer.' }
   const headChanged = !info.value || info.value.head !== next.head
   info.value = next
   if (!next.ok) return
