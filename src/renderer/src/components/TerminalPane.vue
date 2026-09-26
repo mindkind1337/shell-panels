@@ -61,7 +61,16 @@ const IDLE_AFTER_MS = 1400
 // also produce output, but only for a moment).
 const ATTENTION_AFTER_MS = 4000
 let lastRecheck = 0
+// Output that answers something done here (a click that focuses the pane, a
+// resize, a key typed) is the agent redrawing or echoing, not working: it does
+// not count as activity for this long after it.
+const REDRAW_MS = 700
+let redrawUntil = 0
+function expectRedraw() {
+  redrawUntil = Date.now() + REDRAW_MS
+}
 function markActivity() {
+  if (Date.now() < redrawUntil) return
   if (!isAgent.value) return
   // An approval prompt or a usage limit flagged earlier: still on screen? An
   // agent that keeps redrawing a spinner ("Working 12m") never goes quiet, so
@@ -190,6 +199,7 @@ function doFit() {
     // Never shrink to nothing (e.g. while the pane is momentarily unmeasurable).
     if (dims.cols < 2 || dims.rows < 1) return
     if (dims.cols !== term.cols || dims.rows !== term.rows) {
+      expectRedraw()
       const wasAtBottom = atBottom() || Date.now() < keepBottomUntil
       term.resize(dims.cols, dims.rows)
       if (wasAtBottom) {
@@ -758,7 +768,15 @@ onMounted(() => {
   if (history) term.write(history)
 
   // User input → routed through App (handles broadcast / multi-write).
-  term.onData((data) => ctx.routeInput(props.node.id, data))
+  term.onData((data) => {
+    expectRedraw()
+    ctx.routeInput(props.node.id, data)
+  })
+  // Focus in or out (a click on the pane): the agent may redraw its screen.
+  if (term.textarea) {
+    term.textarea.addEventListener('focus', expectRedraw)
+    term.textarea.addEventListener('blur', expectRedraw)
+  }
   // onResize fires only when cols/rows actually change → debounce-notify the PTY.
   term.onResize(() => {
     publishMinSize()
