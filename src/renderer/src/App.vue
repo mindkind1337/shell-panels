@@ -4784,6 +4784,23 @@ function selectedShellName() {
   return shells.value.find((shell) => shell.id === selectedShell.value)?.name || 'Shell'
 }
 
+// An overlay closes (palette, confirmation, notes, review): the keyboard
+// goes back to the pane in use, unless something else took it meanwhile.
+function focusActivePane() {
+  nextTick(() => {
+    const el = document.activeElement
+    if (el && el !== document.body && !el.closest('.pal, .help-card, .notes-panel, .review-panel')) return
+    const ta = document.querySelector('.ws-layer:not(.hidden) .pane.active .xterm-helper-textarea')
+    if (ta) ta.focus()
+  })
+}
+watch(
+  () => [paletteOpen.value, !!confirmState.value, !!notesView.value, !!reviewTask.value],
+  (now, before) => {
+    if (before && now.some((v, i) => before[i] && !v)) focusActivePane()
+  }
+)
+
 // A dialog is open over the panes: the pane shortcuts (split, close, restart,
 // broadcast, move focus…) must not act on the terminals behind it.
 function dialogOpen() {

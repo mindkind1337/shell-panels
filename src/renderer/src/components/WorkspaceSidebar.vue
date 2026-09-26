@@ -396,6 +396,7 @@ defineExpose({
           tabindex="0"
           @click="emit('select', item.id)"
           @keydown.enter="emit('select', item.id)"
+          @keydown.space.prevent="emit('select', item.id)"
           @dblclick="!collapsed && startRename(item)"
         >
           <span class="ws-badge">

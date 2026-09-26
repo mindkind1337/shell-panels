@@ -27,6 +27,25 @@ function notifyLayoutChange() {
 // Drag the divider that sits between child `i` and child `i+1`. We move the
 // boundary by adjusting only that adjacent pair, keeping their combined size
 // constant — so other panes in the row/column stay put.
+// Keyboard: the arrow keys move a divider by 2% (each pane keeps at least
+// 5% of the split).
+function onDividerKey(e, i) {
+  const isRow = props.node.dir === 'row'
+  const back = isRow ? 'ArrowLeft' : 'ArrowUp'
+  const fwd = isRow ? 'ArrowRight' : 'ArrowDown'
+  if (e.key !== back && e.key !== fwd) return
+  e.preventDefault()
+  e.stopPropagation()
+  const sizes = props.node.sizes
+  const step = e.key === fwd ? 2 : -2
+  const a = sizes[i] + step
+  const b = sizes[i + 1] - step
+  if (a < 5 || b < 5) return
+  sizes[i] = a
+  sizes[i + 1] = b
+  notifyLayoutChange()
+}
+
 function startDrag(e, i) {
   e.preventDefault()
   const el = containerEl.value
@@ -83,7 +102,12 @@ function startDrag(e, i) {
         v-if="i < node.children.length - 1"
         class="divider"
         :class="[node.dir, { dragging: dragIndex === i }]"
+        role="separator"
+        tabindex="0"
+        :aria-orientation="node.dir === 'row' ? 'vertical' : 'horizontal'"
+        aria-label="Resize panes (arrow keys)"
         @pointerdown="startDrag($event, i)"
+        @keydown="onDividerKey($event, i)"
       ></div>
     </template>
   </div>

@@ -7,7 +7,8 @@
 // its siblings to re-render.
 
 import { ref, computed, nextTick, inject } from 'vue'
-import { updateTask, removeTask, assignAgent } from '../taskBoardStore'
+import { updateTask, removeTask, assignAgent, moveTask } from '../taskBoardStore'
+import { COLUMNS } from '../../../shared/taskModel'
 import BrandIcon from './BrandIcon.vue'
 import { formatDuration } from '../../../shared/activity'
 
@@ -56,6 +57,23 @@ function saveTitle() {
 
 function cancelEdit() {
   editing.value = false
+}
+
+// Keyboard: Alt+Left / Alt+Right move the focused card one column.
+function onCardKey(e) {
+  if (!e.altKey || e.ctrlKey || e.shiftKey || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return
+  if (e.target !== e.currentTarget) return // typing in its title or menu
+  e.preventDefault()
+  e.stopPropagation()
+  const i = COLUMNS.indexOf(props.task.column)
+  const j = i + (e.key === 'ArrowRight' ? 1 : -1)
+  if (i < 0 || j < 0 || j >= COLUMNS.length) return
+  moveTask(props.task.id, COLUMNS[j])
+  nextTick(() => {
+    // It moved to another column (a new card element): keep the focus on it.
+    const el = document.querySelector(`[data-task-id="${props.task.id}"]`)
+    if (el) el.focus()
+  })
 }
 
 // The app asks first (and cleans up the task's copy); alone (tests), direct.
@@ -113,8 +131,12 @@ function paneLabel(pane) {
     class="task-card"
     :class="{ dragging }"
     data-test="task-card"
+    :data-task-id="task.id"
     :draggable="!editing"
-    title="Drag to another column"
+    tabindex="0"
+    title="Drag to another column (keyboard: Alt+Left / Alt+Right)"
+    aria-keyshortcuts="Alt+ArrowLeft Alt+ArrowRight"
+    @keydown="onCardKey"
     @dragstart="onDragStart"
     @dragend="dragging = false"
   >

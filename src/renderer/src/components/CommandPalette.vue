@@ -81,6 +81,11 @@ onMounted(() => inputEl.value && inputEl.value.focus())
           class="pal-input"
           placeholder="Search panes, workspaces and commands"
           spellcheck="false"
+          role="combobox"
+          aria-expanded="true"
+          aria-controls="pal-list"
+          aria-autocomplete="list"
+          :aria-activedescendant="rows.length ? 'pal-item-' + index : undefined"
           @keydown.down.prevent="move(1)"
           @keydown.up.prevent="move(-1)"
           @keydown.enter.prevent="run(results[index])"
@@ -88,11 +93,15 @@ onMounted(() => inputEl.value && inputEl.value.focus())
         />
         <kbd class="pal-kbd">Esc</kbd>
       </div>
-      <div ref="listEl" class="pal-list">
+      <div id="pal-list" ref="listEl" class="pal-list" role="listbox">
         <template v-for="(r, i) in rows" :key="r.c.id">
           <div v-if="r.header" class="pal-group">{{ r.header }}</div>
           <button
+            :id="'pal-item-' + i"
             class="pal-item"
+            role="option"
+            :aria-selected="i === index"
+            tabindex="-1"
             :class="{ active: i === index }"
             @mouseenter="index = i"
             @click="run(r.c)"
