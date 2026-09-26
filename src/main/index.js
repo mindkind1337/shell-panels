@@ -1195,7 +1195,16 @@ ipcMain.handle('pty:reconcile', async (_evt, liveIds = []) => {
   }
   const keep = new Set(liveIds)
   let closed = 0
-  const list = hello && hello.ptys ? hello.ptys.map((p) => p.id) : [...ptyInfo.keys()]
+  // Every terminal the host really runs (an older host cannot tell: then
+  // those known at connection, then those this app attached or created).
+  let list = null
+  try {
+    const res = await host.request('list', {}, 3000)
+    if (res && res.ok && Array.isArray(res.ids)) list = res.ids
+  } catch {
+    list = null
+  }
+  if (!list) list = hello && hello.ptys ? hello.ptys.map((p) => p.id) : [...ptyInfo.keys()]
   for (const id of list) {
     if (!keep.has(id)) {
       host.send('kill', { id })
@@ -1241,11 +1250,15 @@ let shutdownDone = false
 // Save every terminal's recent output (64 KB each) for the next start.
 async function saveScrollback() {
   try {
+    // No host running (it stopped or crashed): nothing to save, and starting
+    // an empty one would replace the output saved before.
+    if (!(await host.connectIfRunning())) return
     const res = await host.request('dump', {}, 4000)
     const keep = {}
     for (const [id, text] of Object.entries(res.buffers || {})) {
       keep[id] = String(text).slice(-64 * 1024)
     }
+    if (!Object.keys(keep).length && fs.existsSync(scrollbackFile())) return
     const tmp = scrollbackFile() + '.tmp'
     fs.writeFileSync(tmp, JSON.stringify(keep))
     fs.renameSync(tmp, scrollbackFile())
@@ -1267,6 +1280,8 @@ app.on('session-end', () => {
 async function shutdownTerminals() {
   quitting = true
   await saveScrollback()
+  // Only a host that runs is asked to stop (asking would start a new one).
+  if (!(await host.connectIfRunning())) return
   try {
     await host.request('shutdown', {}, 4000)
   } catch {

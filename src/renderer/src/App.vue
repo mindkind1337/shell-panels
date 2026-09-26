@@ -510,6 +510,7 @@ async function createLeaf(shellId, agent = null, cwd = null, worktree = null, op
 }
 
 function replaceNode(node, targetId, make) {
+  if (!node) return null
   if (node.type === 'leaf') return node.id === targetId ? make(node) : node
   return {
     ...node,
@@ -517,12 +518,21 @@ function replaceNode(node, targetId, make) {
   }
 }
 
+// The panes that stay keep their share of the room (the sizes follow the
+// children; the removed one's share is spread over the others).
 function removeLeaf(node, targetId) {
+  if (!node) return null
   if (node.type === 'leaf') return node.id === targetId ? null : node
-  const kids = node.children.map((c) => removeLeaf(c, targetId)).filter(Boolean)
-  if (kids.length === 0) return null
-  if (kids.length === 1) return kids[0]
-  return { ...node, children: kids }
+  const kept = []
+  node.children.forEach((c, i) => {
+    const k = removeLeaf(c, targetId)
+    if (k) kept.push({ node: k, size: (node.sizes && node.sizes[i]) || 0 })
+  })
+  if (kept.length === 0) return null
+  if (kept.length === 1) return kept[0].node
+  const total = kept.reduce((t, k) => t + k.size, 0)
+  const sizes = kept.map((k) => (total > 0 ? (k.size / total) * 100 : 100 / kept.length))
+  return { ...node, children: kept.map((k) => k.node), sizes }
 }
 
 function forEachLeaf(node, fn) {
@@ -704,7 +714,21 @@ async function splitLeaf(
 ) {
   const ws = wsOfLeaf(leafId) || currentWs.value
   const leaf = await createLeaf(shellId, agent, opts.cwd || (ws && ws.cwd), worktree, opts)
-  if (!leaf || !ws) return
+  if (!leaf) return
+  if (!ws || !workspaces.value.includes(ws)) {
+    // The workspace is gone meanwhile: do not leave its terminal running.
+    window.shellApi.killPty(leaf.id)
+    return
+  }
+  // The pane it was split from was closed meanwhile: the new pane goes next
+  // to what is there (or is the whole workspace), never lost.
+  if (!findLeafIn(ws.tree, leafId)) {
+    ws.tree = ws.tree
+      ? reactive({ type: 'split', id: newId('split'), dir, sizes: [50, 50], children: [ws.tree, leaf] })
+      : leaf
+    ws.activeId = leaf.id
+    return leaf
+  }
   ws.tree = replaceNode(ws.tree, leafId, (orig) =>
     reactive({
       type: 'split',
@@ -749,11 +773,16 @@ function closeLeaf(leafId, opts = {}) {
     if (ws.activeId === leafId) ws.activeId = firstLeafId(next)
   } else {
     ws.tree = null
+    ws.activeId = null
     createLeaf(selectedShell.value, null, ws.cwd).then((leaf) => {
-      if (leaf) {
-        ws.tree = leaf
-        ws.activeId = leaf.id
+      if (!leaf) return
+      // A pane was dropped here meanwhile: keep it, drop this new shell.
+      if (ws.tree) {
+        window.shellApi.killPty(leaf.id)
+        return
       }
+      ws.tree = leaf
+      ws.activeId = leaf.id
     })
   }
   if (hadTeam) {

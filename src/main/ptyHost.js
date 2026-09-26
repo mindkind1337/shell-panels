@@ -108,7 +108,16 @@ function terminate(id, forceDelay = 1500) {
   } catch {
     /* already gone */
   }
-  if (p.exited || !p.child) return
+  if (p.exited || !p.child) {
+    // Ended by itself: still close its pseudo console (node-pty frees the
+    // console host only on kill()).
+    try {
+      if (p.proc) p.proc.kill()
+    } catch {
+      /* already closed */
+    }
+    return
+  }
   if (p.meta.backend === 'conpty') {
     try {
       p.child.write('\x03')
@@ -117,7 +126,15 @@ function terminate(id, forceDelay = 1500) {
       /* already gone */
     }
     const pid = p.child.pid
-    setTimeout(() => taskkillTree(pid), forceDelay).unref()
+    setTimeout(() => {
+      // Only if it did not end meanwhile: its PID could be another program's.
+      if (!p.exited) taskkillTree(pid)
+      try {
+        if (p.proc) p.proc.kill()
+      } catch {
+        /* already closed */
+      }
+    }, forceDelay).unref()
     return
   }
   try {
@@ -184,6 +201,7 @@ function handle(sock, msg) {
       }
       const entry = {
         child,
+        proc: child, // kept after exit (child becomes null) to close it
         meta: msg.meta || {},
         screen: makeScreen(msg.cols, msg.rows),
         exited: false,
@@ -192,6 +210,7 @@ function handle(sock, msg) {
       }
       ptys.set(msg.id, entry)
       child.onData((data) => {
+        if (ptys.get(msg.id) !== entry) return // stopped and replaced
         entry.screen.vt.write(data)
         broadcast({ op: 'data', id: msg.id, data })
       })
@@ -239,6 +258,9 @@ function handle(sock, msg) {
       }
       return
     }
+    case 'list':
+      reply({ ok: true, ids: [...ptys.keys()] })
+      return
     case 'kill':
       terminate(msg.id)
       checkIdle()
