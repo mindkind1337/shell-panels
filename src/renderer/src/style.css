@@ -876,14 +876,24 @@ button {
 
 .task-column {
   padding-top: 10px;
-  border-radius: var(--radius);
+}
+
+.task-column-body {
   transition: background 0.12s;
 }
 
 /* A card dragged over this column. */
-.task-column.drop-here {
+/* A card dragged over a column: only its card area lights up (not the title);
+   an empty column's dashed box takes the color. */
+.task-column.drop-here .task-column-body {
+  border-radius: var(--radius);
   background: color-mix(in srgb, var(--col, var(--accent)) 12%, transparent);
   outline: 1px dashed color-mix(in srgb, var(--col, var(--accent)) 60%, transparent);
+}
+
+.task-column.drop-here .task-column-empty {
+  border-color: transparent;
+  color: var(--col, var(--accent));
 }
 
 .task-card[draggable='true'] {
