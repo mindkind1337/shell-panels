@@ -26,7 +26,7 @@ import { reviewInfo, reviewDiff, reviewMerge, reviewRemove } from './review'
 import { takeTeamAcks } from './teamAcks'
 import { writeJsonSafe, readJsonSafe } from './safeJson'
 import { addNotices, writeCurrentTeams, retireOldTeams } from './teamNotices'
-import { publishTeamTasks, takeTeamRequests, finishTeamRequests, messageStatuses } from './teamTasks'
+import { publishTeamTasks, takeTeamRequests, finishTeamRequests, messageStatuses, writeBoardPanes } from './teamTasks'
 import { writeServerScript, installClaudeHooks, installCodexServer, claudeServerPresent, SERVER_NAME } from './teamInstall'
 import teamServerSource from './teamMcp/server.cjs?raw'
 import { ensureInbox, takeInbox, removeInbox } from './leadInbox'
@@ -751,6 +751,7 @@ ipcMain.handle('team:retire', safe((args) => retireOldTeams({ ...args, owner: TE
 ipcMain.handle('team:tasks', safe(publishTeamTasks))
 ipcMain.handle('team:requests', safe(takeTeamRequests))
 ipcMain.handle('team:requests-done', safe(finishTeamRequests))
+ipcMain.handle('team:board-panes', safe((args) => writeBoardPanes({ ...args, owner: TEAM_OWNER })))
 ipcMain.handle('team:message-status', safe(messageStatuses))
 
 // A Codex config.toml Tessel is about to write, checked by Codex itself in a

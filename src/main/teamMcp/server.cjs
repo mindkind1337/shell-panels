@@ -24,7 +24,7 @@
 const fs = require('fs')
 const path = require('path')
 
-const VERSION = '1.3.1'
+const VERSION = '1.4.0'
 const MAX_TEXT = 6000
 
 // --- Finding my team and me ---------------------------------------------------
@@ -361,8 +361,37 @@ const TOOLS = [
   }
 ]
 
+// An agent in no team: its workspace's board (.tessel/board/<workspace>),
+// from the panes.<window>.json files Tessel writes (fresh ones only).
+function boardLocate(start) {
+  const paneId = process.env.TESSEL_PANE_ID || ''
+  if (!paneId) return null
+  for (const dir of candidateDirs(start)) {
+    const base = path.join(dir, '.tessel', 'board')
+    let names = []
+    try {
+      names = fs.readdirSync(base)
+    } catch {
+      continue
+    }
+    for (const n of names) {
+      if (!/^panes\.[A-Za-z0-9_-]{1,40}\.json$/.test(n)) continue
+      const data = readJson(path.join(base, n))
+      if (!data || !data.panes || typeof data.at !== 'number' || Date.now() - data.at > WINDOW_GONE_MS) continue
+      const p = data.panes[paneId]
+      if (p && /^[A-Za-z0-9._-]{1,100}$/.test(String(p.ws)) && !String(p.ws).startsWith('.'))
+        return { root: path.join(base, p.ws), meId: paneId, me: { num: p.num } }
+    }
+  }
+  return null
+}
+
+const BOARD_TOOLS = ['team_tasks', 'team_task_add', 'team_task_move']
+
 function callTool(name, args = {}) {
-  const ctx = locate(args.me)
+  let ctx = locate(args.me)
+  // Alone (no team): the board tools use the workspace's board.
+  if (ctx.error && BOARD_TOOLS.includes(name)) ctx = boardLocate() || ctx
   if (ctx.error) return { text: ctx.error, isError: true }
   if (name === 'team_inbox') return { text: readInbox(ctx) || 'No new messages.' }
   if (name === 'team_members') return { text: members(ctx) }

@@ -6,6 +6,10 @@
 //     an agent asks Tessel to add or move a card; Tessel applies it on the
 //     board, and deletes the file only once the board is saved (a request
 //     applied again after a crash is recognised by its file name: no double)
+// An agent that is in no team uses its workspace's board the same way:
+//   <project>/.tessel/board/<workspace id>/tasks.json and requests/
+//   <project>/.tessel/board/panes.<window>.json   which agents work alone in
+//     which workspace (written by each Tessel window, read by the team tools)
 import fs from 'fs'
 import { join, resolve, isAbsolute } from 'path'
 
@@ -15,9 +19,42 @@ const MAX_TITLE = 200
 const MAX_REQUESTS = 50 // per round
 const UNREADABLE_AFTER_MS = 5000
 
-function teamRoot(dir, teamId) {
-  if (typeof dir !== 'string' || !isAbsolute(dir) || typeof teamId !== 'string' || !ID_RE.test(teamId)) return null
+// A team's folder, or (board: a workspace id) the workspace board's folder.
+function teamRoot(dir, teamId, board = null) {
+  if (typeof dir !== 'string' || !isAbsolute(dir)) return null
+  if (board != null) {
+    if (typeof board !== 'string' || !ID_RE.test(board)) return null
+    return join(resolve(dir), '.tessel', 'board', board)
+  }
+  if (typeof teamId !== 'string' || !ID_RE.test(teamId)) return null
   return join(resolve(dir), '.tessel', 'team-channel', teamId)
+}
+
+// Agents working alone in this project, by workspace, for this window:
+// panes: { <paneId>: { ws, num } }. Rewritten when it changes, and every
+// minute anyway (a file older than 5 minutes is from a window that is gone).
+const OWNER_RE = /^[A-Za-z0-9_-]{1,40}$/
+export function writeBoardPanes({ dir, owner, panes } = {}) {
+  if (typeof dir !== 'string' || !isAbsolute(dir) || !fs.existsSync(dir) || !OWNER_RE.test(String(owner)) || !panes)
+    return { ok: false, error: 'Invalid board location.' }
+  const clean = {}
+  for (const [id, p] of Object.entries(panes)) {
+    if (ID_RE.test(id) && p && ID_RE.test(String(p.ws)) && Number.isInteger(p.num)) clean[id] = { ws: p.ws, num: p.num }
+  }
+  const base = join(resolve(dir), '.tessel', 'board')
+  if (!Object.keys(clean).length && !fs.existsSync(base)) return { ok: true, changed: false }
+  fs.mkdirSync(base, { recursive: true })
+  const file = join(base, `panes.${owner}.json`)
+  let old = null
+  try {
+    old = JSON.parse(fs.readFileSync(file, 'utf8'))
+  } catch {
+    old = null
+  }
+  const same = old && JSON.stringify(old.panes) === JSON.stringify(clean)
+  if (same && Date.now() - (old.at || 0) < 60000) return { ok: true, changed: false }
+  writeAtomic(file, { version: 1, owner, at: Date.now(), panes: clean })
+  return { ok: true, changed: !same }
 }
 
 function writeAtomic(file, data) {
@@ -27,10 +64,12 @@ function writeAtomic(file, data) {
 }
 
 // tasks: [{ id, title, column, assignee ("#1" or null), since }]
-export function publishTeamTasks({ dir, teamId, tasks } = {}) {
-  const root = teamRoot(dir, teamId)
+export function publishTeamTasks({ dir, teamId, board, tasks } = {}) {
+  const root = teamRoot(dir, teamId, board)
   if (!root || !Array.isArray(tasks)) return { ok: false, error: 'Invalid team location.' }
-  if (!fs.existsSync(root)) return { ok: true, changed: false }
+  // A team's folder is made by its channel; a workspace board's here.
+  if (board != null) fs.mkdirSync(root, { recursive: true })
+  else if (!fs.existsSync(root)) return { ok: true, changed: false }
   const clean = tasks
     .filter((t) => t && ID_RE.test(String(t.id)) && typeof t.title === 'string' && TASK_COLUMNS.includes(t.column))
     .map((t) => ({
@@ -57,8 +96,8 @@ export function publishTeamTasks({ dir, teamId, tasks } = {}) {
 // -> { ok, requests: [{ file, fromId, action: 'add', title, assignee, column }
 //                      | { file, fromId, action: 'move', id, column }] ,
 //      refused: [{ fromId, error }] }
-export function takeTeamRequests({ dir, teamId } = {}) {
-  const root = teamRoot(dir, teamId)
+export function takeTeamRequests({ dir, teamId, board } = {}) {
+  const root = teamRoot(dir, teamId, board)
   if (!root) return { ok: false, error: 'Invalid team location.' }
   const folder = join(root, 'requests')
   if (!fs.existsSync(folder)) return { ok: true, requests: [], refused: [] }
@@ -110,8 +149,8 @@ export function takeTeamRequests({ dir, teamId } = {}) {
 }
 
 // The requests applied and saved on the board: their files go.
-export function finishTeamRequests({ dir, teamId, files } = {}) {
-  const root = teamRoot(dir, teamId)
+export function finishTeamRequests({ dir, teamId, board, files } = {}) {
+  const root = teamRoot(dir, teamId, board)
   if (!root || !Array.isArray(files)) return { ok: false, error: 'Invalid team location.' }
   const removed = [] // gone for sure: they cannot come back
   for (const name of files) {

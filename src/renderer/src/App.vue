@@ -3369,6 +3369,9 @@ async function pollTeams() {
       await deliverChannel(team, members, round)
       if (roundGone(round)) return
     }
+    teamStepIs('workspace boards')
+    await syncSoloBoards(round)
+    if (roundGone(round)) return
     teamStepIs('team map')
     await publishCurrentTeams()
   } finally {
@@ -3772,11 +3775,43 @@ function logTeamMessages(team, res) {
 // Tessel being the board's only writer, and the team's cards (those of its
 // workspace) are published back for them to read. A refused request is
 // told to its agent in the background.
-async function syncTeamBoard(team, dir, members, round = teamRound) {
+function syncTeamBoard(team, dir, members, round = teamRound) {
+  return syncBoard({ key: team.id, dir, target: { teamId: team.id }, wsId: teamWsId(team.id), members, teamId: team.id }, round)
+}
+
+// Agents in no team use their workspace's board the same way
+// (.tessel/board/<workspace>, see src/main/teamTasks.js): Tessel says which
+// agents work alone where, applies their requests and publishes the cards.
+const soloBoardsSeen = new Set() // workspaces whose board was published
+async function syncSoloBoards(round) {
+  if (!window.shellApi.team || !window.shellApi.team.boardPanes) return
+  const byDir = {}
+  for (const ws of workspaces.value) {
+    if (!ws.cwd) continue
+    const solo = []
+    forEachLeaf(ws.tree, (l) => {
+      if (l.kind === 'agent' && l.num && !(l.team && teamById(l.team))) solo.push(l)
+    })
+    const panes = (byDir[ws.cwd] = byDir[ws.cwd] || {})
+    for (const l of solo) panes[l.id] = { ws: ws.id, num: l.num }
+    if (!solo.length && !soloBoardsSeen.has(ws.id)) continue
+    soloBoardsSeen.add(ws.id)
+    await syncBoard({ key: `ws/${ws.id}`, dir: ws.cwd, target: { board: ws.id }, wsId: ws.id, members: solo, teamId: null }, round)
+    if (roundGone(round)) return
+  }
+  for (const [dir, panes] of Object.entries(byDir)) {
+    await window.shellApi.team.boardPanes({ dir, panes })
+    if (roundGone(round)) return
+  }
+}
+
+// b: { key (ledger and cache key), dir, target ({ teamId } or { board }),
+// wsId, members (agents allowed to ask), teamId (null: alone) }
+async function syncBoard(b, round = teamRound) {
   if (!window.shellApi.team || !window.shellApi.team.requests) return
-  const wsId = teamWsId(team.id)
+  const { key: boardKey, dir, target, wsId, members } = b
   const byNum = (n) => members.find((m) => m.num === Number(String(n).slice(1))) || null
-  const res = await window.shellApi.team.requests({ dir, teamId: team.id })
+  const res = await window.shellApi.team.requests({ dir, ...target })
   // Replaced meanwhile: these requests are the new round's to apply.
   if (roundGone(round)) return
   const refusals = []
@@ -3789,7 +3824,7 @@ async function syncTeamBoard(team, dir, members, round = teamRound) {
       if (!from) continue // not (or no longer) in this team
       // Already applied (Tessel stopped before its file was removed): never
       // again, so a later change (or a card deleted since) is not undone.
-      const key = `${team.id}/${r.file}`
+      const key = `${boardKey}/${r.file}`
       if (appliedRequests.has(key)) continue
       appliedRequests.add(key)
       if (r.action === 'add') {
@@ -3832,15 +3867,18 @@ async function syncTeamBoard(team, dir, members, round = teamRound) {
     // already has them: not applied twice).
     if (roundGone(round)) return
     if (saved && saved.ok) {
-      const done = await window.shellApi.team.requestsDone({ dir, teamId: team.id, files: applied }).catch(() => null)
+      const done = await window.shellApi.team.requestsDone({ dir, ...target, files: applied }).catch(() => null)
       if (roundGone(round)) return
-      for (const f of (done && done.removed) || []) appliedRequests.delete(`${team.id}/${f}`)
+      for (const f of (done && done.removed) || []) appliedRequests.delete(`${boardKey}/${f}`)
       scheduleTaskSave()
     }
   }
+  // Told in the background to a team's agents; an agent alone has no such
+  // channel (never typed into its terminal): only logged.
   for (const r of refusals) {
     const leaf = findLeaf(r.fromId)
-    if (leaf) tellAgents([leaf], `[Tessel] ${r.text}`, team.id)
+    if (leaf && b.teamId) tellAgents([leaf], `[Tessel] ${r.text}`, b.teamId)
+    else if (leaf && window.shellApi.log) window.shellApi.log('info', `board: ${paneLabel(leaf)}: ${r.text}`)
   }
   const label = (paneId) => {
     const leaf = paneId ? findLeaf(paneId) : null
@@ -3850,11 +3888,11 @@ async function syncTeamBoard(team, dir, members, round = teamRound) {
     .filter((t) => t.wsId === wsId)
     .map((t) => ({ id: t.id, title: t.title, column: t.column, assignee: label(t.paneId), since: t.doingSince || null }))
   const sig = JSON.stringify(cards)
-  if (boardSigs[team.id] === sig) return
-  const pub = await window.shellApi.team.tasks({ dir, teamId: team.id, tasks: cards })
-  if (!roundGone(round) && pub && pub.ok) boardSigs[team.id] = sig
+  if (boardSigs[boardKey] === sig) return
+  const pub = await window.shellApi.team.tasks({ dir, ...target, tasks: cards })
+  if (!roundGone(round) && pub && pub.ok) boardSigs[boardKey] = sig
 }
-const boardSigs = {} // teamId -> the cards last published
+const boardSigs = {} // board key -> the cards last published
 
 // A message logged unread that is no longer in the recent history (200
 // entries) is looked up in the channel itself, every 10 s at most.

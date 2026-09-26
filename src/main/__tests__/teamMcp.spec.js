@@ -7,7 +7,7 @@ import { createRequire } from 'module'
 import { ensureTeamChannel, pollTeamChannel } from '../teamChannel'
 import { takeTeamAcks } from '../teamAcks'
 import { writeCurrentTeams, retireOldTeams, addNotices } from '../teamNotices'
-import { publishTeamTasks, takeTeamRequests, finishTeamRequests, messageStatuses } from '../teamTasks'
+import { publishTeamTasks, takeTeamRequests, finishTeamRequests, messageStatuses, writeBoardPanes } from '../teamTasks'
 
 const require = createRequire(import.meta.url)
 const SERVER = join(__dirname, '..', 'teamMcp', 'server.cjs')
@@ -517,5 +517,44 @@ describe('robustness of the team files', () => {
     d.at -= 7 * 60 * 60 * 1000 // gone for good
     fs.writeFileSync(f, JSON.stringify(d))
     expect(retireOldTeams({ dir, liveTeamIds: [], owner: 'dev' }).retired).toEqual(['team-1'])
+  })
+})
+
+describe('the workspace board for an agent working alone', () => {
+  let dir
+  beforeEach(() => {
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-soloboard-'))
+    process.env.TESSEL_PANE_ID = 'pane-2-bbbbbb'
+    process.env.TESSEL_PROJECT_DIR = dir
+  })
+  afterEach(() => {
+    delete process.env.TESSEL_PANE_ID
+    delete process.env.TESSEL_PROJECT_DIR
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+  const call = (name, args = {}) => mcp.handle({ id: 1, method: 'tools/call', params: { name, arguments: args } })
+
+  it('adds, lists and moves cards on its workspace board, with no team', () => {
+    // Not known to Tessel as working alone yet: the usual answer.
+    expect(call('team_tasks').isError).toBe(true)
+    writeBoardPanes({ dir, owner: 'dev', panes: { 'pane-2-bbbbbb': { ws: 'ws-a', num: 2 } } })
+    expect(call('team_task_add', { title: 'Fix batch 3', column: 'doing' }).isError).toBe(false)
+    const res = takeTeamRequests({ dir, board: 'ws-a' })
+    expect(res.requests.map(({ file, ...r }) => r)).toEqual([
+      { fromId: 'pane-2-bbbbbb', action: 'add', title: 'Fix batch 3', assignee: '#2', column: 'doing' }
+    ])
+    publishTeamTasks({ dir, board: 'ws-a', tasks: [{ id: 'task-9-1', title: 'Fix batch 3', column: 'doing', assignee: '#2' }] })
+    expect(call('team_tasks').content[0].text).toContain('task-9-1  Fix batch 3  (#2)')
+    // Messages stay a team thing.
+    expect(call('team_inbox').isError).toBe(true)
+  })
+
+  it('ignores the list of a window that is gone', () => {
+    writeBoardPanes({ dir, owner: 'dev', panes: { 'pane-2-bbbbbb': { ws: 'ws-a', num: 2 } } })
+    const f = join(dir, '.tessel', 'board', 'panes.dev.json')
+    const d = JSON.parse(fs.readFileSync(f, 'utf8'))
+    d.at -= 10 * 60 * 1000
+    fs.writeFileSync(f, JSON.stringify(d))
+    expect(call('team_tasks').isError).toBe(true)
   })
 })
