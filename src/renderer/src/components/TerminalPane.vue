@@ -772,11 +772,22 @@ onMounted(() => {
   }
 
   // Replay any buffered history (e.g. after this pane was re-parented by a split).
+  // Old output can hold questions to the terminal (cursor position, device
+  // attributes): xterm would answer them again while replaying, and those
+  // answers would reach the program as typed input. Nothing goes out until
+  // the replay is parsed (it takes a moment; nobody types in it).
+  let replaying = false
   const history = getBuffer(props.node.id)
-  if (history) term.write(history)
+  if (history) {
+    replaying = true
+    term.write(history, () => {
+      replaying = false
+    })
+  }
 
   // User input → routed through App (handles broadcast / multi-write).
   term.onData((data) => {
+    if (replaying) return
     expectRedraw()
     ctx.routeInput(props.node.id, data)
   })
