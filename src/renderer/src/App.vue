@@ -3384,6 +3384,10 @@ async function pollTeams() {
     teamStepIs('workspace boards')
     await syncSoloBoards(round)
     if (roundGone(round)) return
+    // The team tools (messages and the task board) are set up as soon as
+    // Claude Code or Codex is here, not only once a team exists: an agent
+    // working alone uses the board too.
+    if (agents.value.some((a) => (a.id === 'claude' || a.id === 'codex') && a.available)) installTeamToolsOnce()
     teamStepIs('team map')
     await publishCurrentTeams()
   } finally {
