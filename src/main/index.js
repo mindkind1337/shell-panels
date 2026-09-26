@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, clipboard, dialog, Notification, shell } f
 import { join, isAbsolute } from 'path'
 import os from 'os'
 import fs from 'fs'
-import { spawn, execFile, execFileSync } from 'child_process'
+import { spawn, execFile } from 'child_process'
 import { loadTasks, loadBoard, saveTasks } from './taskBoardPersistence'
 import { trimEvents, isEvent } from '../shared/activity'
 import { claudeSessionExists, findCodexSession, listSessions } from './agentSessions'
@@ -281,32 +281,40 @@ const AGENT_PRESETS = [
 // PATH as it is *now* in the registry (machine + user), not as it was when
 // Tessel started. Installing an agent, or fixing PATH, then works in new
 // panes without restarting the app.
+// Run a program without blocking the app (the window and terminals keep
+// running while it works). -> { ok, stdout }
+function runQuiet(file, args, opts = {}) {
+  return new Promise((resolve) => {
+    execFile(file, args, { windowsHide: true, ...opts }, (err, stdout) =>
+      resolve({ ok: !err, stdout: String(stdout || '') })
+    )
+  })
+}
+
 let freshPath = null
-function readFreshPath() {
+async function readFreshPath() {
   if (process.platform !== 'win32') return process.env.PATH
   try {
     // UTF-8 output: by default PowerShell writes in the console code page
     // (cp850 on a French Windows) and folders with accents come out wrong.
     const script =
       "[Console]::OutputEncoding = [Text.Encoding]::UTF8; [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')"
-    const out = execFileSync(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-Command', script],
-      {
-        windowsHide: true,
-        stdio: ['ignore', 'pipe', 'ignore'],
-        timeout: 15000
-      }
-    )
-    const value = out.toString().trim()
+    const res = await runQuiet('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+      timeout: 15000
+    })
+    const value = res.ok ? res.stdout.trim() : ''
     return value || null
   } catch {
     return null
   }
 }
 
+// Read once at start (in the background): until then, the PATH Tessel was
+// started with.
+readFreshPath().then((p) => {
+  if (freshPath === null) freshPath = p || ''
+})
 function currentPath() {
-  if (freshPath === null) freshPath = readFreshPath() || ''
   return freshPath || process.env.PATH || process.env.Path || ''
 }
 
@@ -321,18 +329,10 @@ function freshEnv() {
   return env
 }
 
-function commandExists(bin) {
+async function commandExists(bin) {
   if (!bin || !/^[\w.@+-]+$/.test(bin)) return false
-  try {
-    const out = execFileSync('where.exe', [bin], {
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'ignore'],
-      env: freshEnv()
-    })
-    return out.toString().trim().length > 0
-  } catch {
-    return false
-  }
+  const res = await runQuiet('where.exe', [bin], { env: freshEnv(), timeout: 10000 })
+  return res.ok && res.stdout.trim().length > 0
 }
 
 function firstWord(command) {
@@ -343,30 +343,34 @@ function firstWord(command) {
   )
 }
 
-let agentCache = null
-function getAgents(custom = []) {
+let agentCache = null // a promise of the presets with 'available'
+async function getAgents(custom = []) {
   if (!agentCache) {
-    agentCache = AGENT_PRESETS.map((a) => ({
-      id: a.id,
-      name: a.name,
-      command: a.command,
-      accent: a.accent,
-      install: a.install,
-      available: commandExists(a.command)
-    }))
+    agentCache = Promise.all(
+      AGENT_PRESETS.map(async (a) => ({
+        id: a.id,
+        name: a.name,
+        command: a.command,
+        accent: a.accent,
+        install: a.install,
+        available: await commandExists(a.command)
+      }))
+    )
   }
-  const extra = (Array.isArray(custom) ? custom : [])
-    .filter((c) => c && c.id && c.name && c.command)
-    .map((c) => ({
-      id: String(c.id),
-      name: String(c.name),
-      command: String(c.command),
-      accent: typeof c.accent === 'string' ? c.accent : '#8a93a6',
-      custom: true,
-      install: null,
-      available: commandExists(firstWord(c.command))
-    }))
-  return [...agentCache, ...extra]
+  const extra = await Promise.all(
+    (Array.isArray(custom) ? custom : [])
+      .filter((c) => c && c.id && c.name && c.command)
+      .map(async (c) => ({
+        id: String(c.id),
+        name: String(c.name),
+        command: String(c.command),
+        accent: typeof c.accent === 'string' ? c.accent : '#8a93a6',
+        custom: true,
+        install: null,
+        available: await commandExists(firstWord(c.command))
+      }))
+  )
+  return [...(await agentCache), ...extra]
 }
 
 function defaultShell() {
@@ -587,23 +591,18 @@ ipcMain.handle('app:homeDir', () => os.homedir())
 // regional format (dates/numbers), which is often English even on a French
 // Windows.
 let windowsUiLanguage = null
-ipcMain.handle('app:systemLocale', () => {
+ipcMain.handle('app:systemLocale', async () => {
   if (windowsUiLanguage !== null) return windowsUiLanguage
   windowsUiLanguage = ''
   if (process.platform === 'win32') {
     try {
-      windowsUiLanguage = execFileSync(
-        'powershell.exe',
-        [
-          '-NoProfile',
-          '-NonInteractive',
-          '-Command',
-          '[Globalization.CultureInfo]::CurrentUICulture.Name'
-        ],
-        { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], timeout: 10000 }
-      )
-        .toString()
-        .trim()
+      windowsUiLanguage = (
+        await runQuiet(
+          'powershell.exe',
+          ['-NoProfile', '-NonInteractive', '-Command', '[Globalization.CultureInfo]::CurrentUICulture.Name'],
+          { timeout: 10000 }
+        )
+      ).stdout.trim()
     } catch {
       windowsUiLanguage = ''
     }
@@ -858,7 +857,7 @@ ipcMain.handle(
     // Gemini CLI, Qwen Code, Copilot CLI, OpenCode: in their settings file,
     // for those installed here (a file Tessel cannot read is left alone).
     for (const agent of JSON_AGENTS) {
-      const preset = getAgents().find((a) => a.id === agent)
+      const preset = (await getAgents()).find((a) => a.id === agent)
       if (!preset || !preset.available) continue
       const r = setJsonAgentServer(agent, SERVER_NAME, teamToolsEntry(agent, script))
       if (!r.ok) errors.push(`${preset.name}: ${r.error}`)
@@ -951,29 +950,21 @@ ipcMain.handle('agents:codex-no-daemon', () => codexSupportsNoDaemon())
 ipcMain.handle('agents:detect', safe(detectAgents))
 // Which of these commands are on PATH (fresh PATH, so just-installed tools
 // show up). Returns { bin: true|false }.
-ipcMain.handle('tools:check', (_evt, bins) => {
-  const out = {}
-  for (const b of Array.isArray(bins) ? bins.slice(0, 50) : []) out[b] = commandExists(b)
-  return out
+ipcMain.handle('tools:check', async (_evt, bins) => {
+  const list = Array.isArray(bins) ? bins.slice(0, 50) : []
+  const found = await Promise.all(list.map((b) => commandExists(b)))
+  return Object.fromEntries(list.map((b, i) => [b, found[i]]))
 })
 // Full path of a command on the fresh PATH (null if missing).
-function whichFresh(bin) {
-  try {
-    const out = execFileSync('where.exe', [bin], {
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'ignore'],
-      env: freshEnv()
-    })
-    return (
-      out
-        .toString()
-        .split(/\r?\n/)
-        .map((l) => l.trim())
-        .find(Boolean) || null
-    )
-  } catch {
-    return null
-  }
+async function whichFresh(bin) {
+  const res = await runQuiet('where.exe', [bin], { env: freshEnv(), timeout: 10000 })
+  if (!res.ok) return null
+  return (
+    res.stdout
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .find(Boolean) || null
+  )
 }
 
 function runFile(file, args) {
@@ -991,13 +982,13 @@ function runFile(file, args) {
 // step when it's still needed: GitHub CLI sign-in and git's name/email.
 ipcMain.handle('tools:status', async () => {
   const status = {}
-  const gh = whichFresh('gh')
+  const gh = await whichFresh('gh')
   if (gh) {
     const res = await runFile(gh, ['auth', 'status', '--hostname', 'github.com'])
     const m = /account\s+(\S+)/i.exec(res.out)
     status.gh = { signedIn: res.ok, account: res.ok && m ? m[1] : null }
   }
-  const git = whichFresh('git')
+  const git = await whichFresh('git')
   if (git) {
     const name = await runFile(git, ['config', '--global', 'user.name'])
     const email = await runFile(git, ['config', '--global', 'user.email'])
@@ -1008,16 +999,16 @@ ipcMain.handle('tools:status', async () => {
   return status
 })
 
-ipcMain.handle('tools:refreshPath', () => {
-  freshPath = readFreshPath()
+ipcMain.handle('tools:refreshPath', async () => {
+  freshPath = await readFreshPath()
   agentCache = null
   codexNoDaemon = null
   return true
 })
 
 // Re-read PATH and re-detect agents (after installing one).
-ipcMain.handle('agents:refresh', (_evt, custom) => {
-  freshPath = readFreshPath()
+ipcMain.handle('agents:refresh', async (_evt, custom) => {
+  freshPath = await readFreshPath()
   agentCache = null
   codexNoDaemon = null // an agent just installed or updated
   return getAgents(custom)
