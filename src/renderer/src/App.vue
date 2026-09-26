@@ -830,8 +830,20 @@ function findLeafIn(node, id) {
   return found
 }
 
+// A terminal's own answer to a program's question (cursor position, device
+// attributes, focus in/out): it goes back to that terminal only, never to
+// the other panes.
+const TERMINAL_REPLY = /^\x1b\[[?>]?[\d;]*[cRn]$|^\x1b\[[IO]$|^\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)$/
+
 function routeInput(sourceId, data) {
-  if (broadcast.value) {
+  // Multi-write: only typing in a pane that takes part (its "write" box
+  // ticked), in the workspace on screen, goes to every such pane.
+  let source = null
+  forEachLeaf(tree.value, (leaf) => {
+    if (leaf.id === sourceId) source = leaf
+  })
+  const fanOut = broadcast.value && source && source.broadcast && !TERMINAL_REPLY.test(String(data))
+  if (fanOut) {
     forEachLeaf(tree.value, (leaf) => {
       if (!leaf.broadcast) return
       noteUserInput(leaf.id, data)
@@ -4725,11 +4737,24 @@ function dialogOpen() {
     sessionsOpen.value ||
     helpOpen.value ||
     updateOpen.value ||
-    newTaskOpen.value
+    newTaskOpen.value ||
+    paletteOpen.value ||
+    !!confirmState.value ||
+    launcher.open
   )
 }
 
+// Typing in a text field of Tessel (notes, review, a form, the sidebar):
+// pane shortcuts must not act on the terminals behind it.
+function typingInField(e) {
+  const t = e.target
+  if (!t || !t.closest) return false
+  if (t.closest('.xterm')) return false // a terminal: shortcuts are for it
+  return !!t.closest('input, textarea, select, [contenteditable="true"]')
+}
+
 function onKey(e) {
+  if (typingInField(e) && e.key !== 'Escape' && e.key !== 'F1') return
   if (dialogOpen()) {
     // Ctrl+, and F1 close their own dialog; they never open one over another.
     if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === ',') {
